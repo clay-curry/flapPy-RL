@@ -3,6 +3,13 @@ import random
 import sys
 import pygame
 from pygame.locals import *
+import multiprocessing
+
+# Hi, Clay here
+AGENTMODE = False
+
+
+
 
 FPS = 30
 SCREENWIDTH  = 288
@@ -231,6 +238,9 @@ def mainGame(movementInfo):
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 if playery > -2 * IMAGES['player'][0].get_height():
+                    
+
+
                     playerVelY = playerFlapAcc
                     playerFlapped = True
                     SOUNDS['wing'].play()
@@ -400,6 +410,25 @@ def getRandomPipe():
     gapY += int(BASEY * 0.2)
     pipeHeight = IMAGES['pipe'][0].get_height()
     pipeX = SCREENWIDTH + 10
+    
+    # Hi, Clay here
+    percentTogether = 5.0 # Edit this to pwn the game
+    upY = (BASEY / 2) * (percentTogether / 100.0) - pipeHeight
+    loY = BASEY - (BASEY / 2) * (percentTogether / 100.0)
+
+    return [
+        {'x': pipeX, 'y': upY},  # upper pipe
+        {'x': pipeX, 'y': loY}, # lower pipe
+    ]
+
+
+def oldgetRandomPipe():
+    """returns a randomly generated pipe"""
+    # y of gap between upper and lower pipe
+    gapY = random.randrange(0, int(BASEY * 0.6 - PIPEGAPSIZE))
+    gapY += int(BASEY * 0.2)
+    pipeHeight = IMAGES['pipe'][0].get_height()
+    pipeX = SCREENWIDTH + 10
 
     return [
         {'x': pipeX, 'y': gapY - pipeHeight},  # upper pipe
@@ -420,7 +449,6 @@ def showScore(score):
     for digit in scoreDigits:
         SCREEN.blit(IMAGES['numbers'][digit], (Xoffset, SCREENHEIGHT * 0.1))
         Xoffset += IMAGES['numbers'][digit].get_width()
-
 
 def checkCrash(player, upperPipes, lowerPipes):
     """returns True if player collides with base or pipes."""
