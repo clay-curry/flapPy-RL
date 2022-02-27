@@ -3,13 +3,14 @@ import random
 import sys
 import pygame
 from pygame.locals import *
-import multiprocessing
 
-# Hi, Clay here
-AGENTMODE = False
+from agent import Agent
+from multiprocessing import Pipe
+from multiprocessing.connection import Connection
 
-
-
+# Hi, Clay here. Edit this to turn on the agent
+AGENTMODE = True
+SPEEDUP_FACTOR = 1
 
 FPS = 30
 SCREENWIDTH  = 288
@@ -161,6 +162,8 @@ def showWelcomeAnimation():
     playerShmVals = {'val': 0, 'dir': 1}
 
     while True:
+      
+
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
@@ -187,6 +190,9 @@ def showWelcomeAnimation():
                     (playerx, playery + playerShmVals['val']))
         SCREEN.blit(IMAGES['message'], (messagex, messagey))
         SCREEN.blit(IMAGES['base'], (basex, BASEY))
+        if AGENTMODE:
+            flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
+            pygame.event.post(flap)
 
         pygame.display.update()
         FPSCLOCK.tick(FPS)
@@ -216,22 +222,28 @@ def mainGame(movementInfo):
         {'x': SCREENWIDTH + 200 + (SCREENWIDTH / 2), 'y': newPipe2[1]['y']},
     ]
 
-    dt = FPSCLOCK.tick(FPS)/1000
-    pipeVelX = -128 * dt
+    dt = SPEEDUP_FACTOR * FPSCLOCK.tick(FPS)/1000
+    pipeVelX = (-128 * dt)
 
     # player velocity, max velocity, downward acceleration, acceleration on flap
-    playerVelY    =  -9   # player's velocity along Y, default same as playerFlapped
-    playerMaxVelY =  10   # max vel along Y, max descend speed
-    playerMinVelY =  -8   # min vel along Y, max ascend speed
-    playerAccY    =   1   # players downward acceleration
-    playerRot     =  45   # player's rotation
-    playerVelRot  =   3   # angular speed
-    playerRotThr  =  20   # rotation threshold
-    playerFlapAcc =  -9   # players speed on flapping
+    playerVelY    =  SPEEDUP_FACTOR * (-9)   # player's velocity along Y, default same as playerFlapped
+    playerMaxVelY =  SPEEDUP_FACTOR * (10)   # max vel along Y, max descend speed
+    playerMinVelY =  SPEEDUP_FACTOR * (-8)   # min vel along Y, max ascend speed
+    playerAccY    =  SPEEDUP_FACTOR * (1)   # players downward acceleration
+    playerRot     =  SPEEDUP_FACTOR * (45)   # player's rotation
+    playerVelRot  =  SPEEDUP_FACTOR * (3)  # angular speed
+    playerRotThr  =  SPEEDUP_FACTOR * (20)   # rotation threshold
+    playerFlapAcc =  SPEEDUP_FACTOR * (-9)   # players speed on flapping
     playerFlapped = False # True when player flaps
-
+    
+    agent = Agent(SPEEDUP_FACTOR)
 
     while True:
+        # agent plays here
+        if AGENTMODE:
+            playermove = agent.move(ypos=playery)
+            pygame.event.post(playermove)
+    
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
@@ -239,8 +251,6 @@ def mainGame(movementInfo):
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 if playery > -2 * IMAGES['player'][0].get_height():
                     
-
-
                     playerVelY = playerFlapAcc
                     playerFlapped = True
                     SOUNDS['wing'].play()
@@ -266,7 +276,7 @@ def mainGame(movementInfo):
             pipeMidPos = pipe['x'] + IMAGES['pipe'][0].get_width() / 2
             if pipeMidPos <= playerMidPos < pipeMidPos + 4:
                 score += 1
-                SOUNDS['point'].play()
+                # SOUNDS['point'].play()
 
         # playerIndex basex change
         if (loopIter + 1) % 3 == 0:
@@ -275,8 +285,8 @@ def mainGame(movementInfo):
         basex = -((-basex + 100) % baseShift)
 
         # rotate the player
-        if playerRot > -90:
-            playerRot -= playerVelRot
+        # if playerRot > -90:
+        playerRot -= playerVelRot
 
         # player's movement
         if playerVelY < playerMaxVelY and not playerFlapped:
@@ -285,7 +295,7 @@ def mainGame(movementInfo):
             playerFlapped = False
 
             # more rotation to cover the threshold (calculated in visible rotation)
-            playerRot = 45
+            # playerRot = 45
 
         playerHeight = IMAGES['player'][playerIndex].get_height()
         playery += min(playerVelY, BASEY - playery - playerHeight)
@@ -296,7 +306,7 @@ def mainGame(movementInfo):
             lPipe['x'] += pipeVelX
 
         # add new pipe when first pipe is about to touch left of screen
-        if 3 > len(upperPipes) > 0 and 0 < upperPipes[0]['x'] < 5:
+        if SPEEDUP_FACTOR * 3 > len(upperPipes) > 0 and 0 < upperPipes[0]['x'] < 5 * SPEEDUP_FACTOR:
             newPipe = getRandomPipe()
             upperPipes.append(newPipe[0])
             lowerPipes.append(newPipe[1])
@@ -318,9 +328,9 @@ def mainGame(movementInfo):
         showScore(score)
 
         # Player rotation has a threshold
-        visibleRot = playerRotThr
-        if playerRot <= playerRotThr:
-            visibleRot = playerRot
+        visibleRot = playerRot
+        # if playerRot > playerRotThr:
+        #    visibleRot = playerRotThr
         
         playerSurface = pygame.transform.rotate(IMAGES['player'][playerIndex], visibleRot)
         SCREEN.blit(playerSurface, (playerx, playery))
@@ -349,7 +359,10 @@ def showGameOverScreen(crashInfo):
     if not crashInfo['groundCrash']:
         SOUNDS['die'].play()
 
-    while True:
+    while True:      
+        if AGENTMODE:
+            flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
+            pygame.event.post(flap)
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
