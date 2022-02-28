@@ -1,5 +1,6 @@
 from itertools import cycle
 import random
+from re import U
 import sys
 import pygame
 from pygame.locals import *
@@ -10,7 +11,7 @@ from multiprocessing.connection import Connection
 
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 1
+SHOWMARKUP = True
 
 FPS = 30
 SCREENWIDTH  = 288
@@ -209,6 +210,10 @@ def mainGame(movementInfo):
     # get 2 new pipes to add to upperPipes lowerPipes list
     newPipe1 = getRandomPipe()
     newPipe2 = getRandomPipe()
+    pipeHeight  = IMAGES['pipe'][0].get_height()
+    pipeWidth   = IMAGES['pipe'][0].get_width()
+        
+
 
     # list of upper pipes
     upperPipes = [
@@ -222,28 +227,23 @@ def mainGame(movementInfo):
         {'x': SCREENWIDTH + 200 + (SCREENWIDTH / 2), 'y': newPipe2[1]['y']},
     ]
 
-    dt = SPEEDUP_FACTOR * FPSCLOCK.tick(FPS)/1000
+    dt = FPSCLOCK.tick(FPS)/1000
     pipeVelX = (-128 * dt)
 
     # player velocity, max velocity, downward acceleration, acceleration on flap
-    playerVelY    =  SPEEDUP_FACTOR * (-9)   # player's velocity along Y, default same as playerFlapped
-    playerMaxVelY =  SPEEDUP_FACTOR * (10)   # max vel along Y, max descend speed
-    playerMinVelY =  SPEEDUP_FACTOR * (-8)   # min vel along Y, max ascend speed
-    playerAccY    =  SPEEDUP_FACTOR * (1)   # players downward acceleration
-    playerRot     =  SPEEDUP_FACTOR * (45)   # player's rotation
-    playerVelRot  =  SPEEDUP_FACTOR * (3)  # angular speed
-    playerRotThr  =  SPEEDUP_FACTOR * (20)   # rotation threshold
-    playerFlapAcc =  SPEEDUP_FACTOR * (-9)   # players speed on flapping
+    playerVelY    =  (-9)   # player's velocity along Y, default same as playerFlapped
+    playerMaxVelY =  (10)   # max vel along Y, max descend speed
+    playerMinVelY =  (-8)   # min vel along Y, max ascend speed
+    playerAccY    =  (1)   # players downward acceleration
+    playerRot     =  (45)   # player's rotation
+    playerVelRot  =  (3)  # angular speed
+    playerRotThr  =  (20)   # rotation threshold
+    playerFlapAcc =  (-9)   # players speed on flapping
     playerFlapped = False # True when player flaps
     
-    agent = Agent(SPEEDUP_FACTOR)
+    agent = Agent()
 
     while True:
-        # agent plays here
-        if AGENTMODE:
-            playermove = agent.move(ypos=playery)
-            pygame.event.post(playermove)
-    
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
@@ -306,7 +306,7 @@ def mainGame(movementInfo):
             lPipe['x'] += pipeVelX
 
         # add new pipe when first pipe is about to touch left of screen
-        if SPEEDUP_FACTOR * 3 > len(upperPipes) > 0 and 0 < upperPipes[0]['x'] < 5 * SPEEDUP_FACTOR:
+        if 3 > len(upperPipes) > 0 and 0 < upperPipes[0]['x'] < 5:
             newPipe = getRandomPipe()
             upperPipes.append(newPipe[0])
             lowerPipes.append(newPipe[1])
@@ -322,7 +322,8 @@ def mainGame(movementInfo):
         for uPipe, lPipe in zip(upperPipes, lowerPipes):
             SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
             SCREEN.blit(IMAGES['pipe'][1], (lPipe['x'], lPipe['y']))
-
+        
+            
         SCREEN.blit(IMAGES['base'], (basex, BASEY))
         # print score so player overlaps the score
         showScore(score)
@@ -334,6 +335,19 @@ def mainGame(movementInfo):
         
         playerSurface = pygame.transform.rotate(IMAGES['player'][playerIndex], visibleRot)
         SCREEN.blit(playerSurface, (playerx, playery))
+
+        ############################# agent plays here
+        if AGENTMODE:
+            u_pos = l_pos = []
+            for uPipe, lPipe in zip(upperPipes, lowerPipes):
+                u_pos.append([uPipe['x'],uPipe['y']+pipeHeight,uPipe['x']+pipeWidth,uPipe['y']+pipeHeight])
+                u_pos.append([lPipe['x'],lPipe['y'],lPipe['x']+pipeWidth,lPipe['y']])
+                
+            playermove = agent.move(y_pos=playery,u_pos=u_pos,l_pos=l_pos,n_points=score)
+            pygame.event.post(playermove)
+            agent.draw(SCREEN)
+        ############################# gameplay
+        
 
         pygame.display.update()
         FPSCLOCK.tick(FPS)
@@ -393,9 +407,6 @@ def showGameOverScreen(crashInfo):
 
         SCREEN.blit(IMAGES['base'], (basex, BASEY))
         showScore(score)
-
-        
-
 
         playerSurface = pygame.transform.rotate(IMAGES['player'][1], playerRot)
         SCREEN.blit(playerSurface, (playerx,playery))
