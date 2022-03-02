@@ -6,20 +6,20 @@ import pygame
 from pygame.locals import *
 
 from agent import Agent
-from multiprocessing import Pipe
-from multiprocessing.connection import Connection
-
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SHOWMARKUP = True
+SPEEDUP_FACTOR = 1
 
-FPS = 30
+FPS = 30 * SPEEDUP_FACTOR
 SCREENWIDTH  = 288
 SCREENHEIGHT = 512
 PIPEGAPSIZE  = 100 # gap between upper and lower part of pipe
 BASEY        = SCREENHEIGHT * 0.79
 # image, sound and hitmask  dicts
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
+agent = Agent(speedup_factor=SPEEDUP_FACTOR, xpos=int(SCREENWIDTH * .20), ypos_min=0, ypos_max=BASEY,
+              yvel_min=-10, yvel_max=10, dx_max=SCREENWIDTH + 200 + (SCREENWIDTH / 2))
+
 
 # list of all possible players (tuple of 3 positions of flap)
 PLAYERS_LIST = (
@@ -227,21 +227,19 @@ def mainGame(movementInfo):
         {'x': SCREENWIDTH + 200 + (SCREENWIDTH / 2), 'y': newPipe2[1]['y']},
     ]
 
-    dt = FPSCLOCK.tick(FPS)/1000
-    pipeVelX = (-128 * dt)
+    dt = FPSCLOCK.tick(FPS * SPEEDUP_FACTOR)/1000
+    pipeVelX = (-128 * dt) * SPEEDUP_FACTOR
 
     # player velocity, max velocity, downward acceleration, acceleration on flap
-    playerVelY    =  (-9)   # player's velocity along Y, default same as playerFlapped
-    playerMaxVelY =  (10)   # max vel along Y, max descend speed
-    playerMinVelY =  (-8)   # min vel along Y, max ascend speed
-    playerAccY    =  (1)   # players downward acceleration
-    playerRot     =  (45)   # player's rotation
-    playerVelRot  =  (3)  # angular speed
-    playerRotThr  =  (20)   # rotation threshold
-    playerFlapAcc =  (-9)   # players speed on flapping
+    playerVelY    = -9 * SPEEDUP_FACTOR   # player's velocity along Y, default same as playerFlapped
+    playerMaxVelY = 10 * SPEEDUP_FACTOR  # max vel along Y, max descend speed
+    playerMinVelY = -8 * SPEEDUP_FACTOR  # min vel along Y, max ascend speed
+    playerAccY    = 1 * SPEEDUP_FACTOR  # players downward acceleration
+    playerRot     = 45 * SPEEDUP_FACTOR  # player's rotation
+    playerVelRot  = 3 * SPEEDUP_FACTOR # angular speed
+    playerRotThr  = 20 * SPEEDUP_FACTOR  # rotation threshold
+    playerFlapAcc = -9 * SPEEDUP_FACTOR  # players speed on flapping
     playerFlapped = False # True when player flaps
-    
-    agent = Agent()
 
     while True:
         for event in pygame.event.get():
@@ -302,12 +300,13 @@ def mainGame(movementInfo):
 
         # move pipes to left
         for uPipe, lPipe in zip(upperPipes, lowerPipes):
-            uPipe['x'] += pipeVelX
-            lPipe['x'] += pipeVelX
+            uPipe['x'] += pipeVelX * SPEEDUP_FACTOR
+            lPipe['x'] += pipeVelX * SPEEDUP_FACTOR
 
         # add new pipe when first pipe is about to touch left of screen
         if 3 > len(upperPipes) > 0 and 0 < upperPipes[0]['x'] < 5:
             newPipe = getRandomPipe()
+            print(newPipe)
             upperPipes.append(newPipe[0])
             lowerPipes.append(newPipe[1])
 
@@ -328,6 +327,7 @@ def mainGame(movementInfo):
         # print score so player overlaps the score
         showScore(score)
 
+        # bird circles haha - clay
         # Player rotation has a threshold
         visibleRot = playerRot
         # if playerRot > playerRotThr:
@@ -338,14 +338,14 @@ def mainGame(movementInfo):
 
         ############################# agent plays here
         if AGENTMODE:
-            u_pos = l_pos = []
+            u_pos = []
+            l_pos = []
             for uPipe, lPipe in zip(upperPipes, lowerPipes):
-                u_pos.append([uPipe['x'],uPipe['y']+pipeHeight,uPipe['x']+pipeWidth,uPipe['y']+pipeHeight])
-                u_pos.append([lPipe['x'],lPipe['y'],lPipe['x']+pipeWidth,lPipe['y']])
-                
-            playermove = agent.move(y_pos=playery,u_pos=u_pos,l_pos=l_pos,n_points=score)
+                u_pos.append([uPipe['x'], uPipe['y']+pipeHeight, uPipe['x']+pipeWidth, uPipe['y']+pipeHeight])
+                l_pos.append([lPipe['x'], lPipe['y'], lPipe['x']+pipeWidth, lPipe['y']])
+            playermove = agent.move(y_pos=playery,y_vel=playerVelY,upipes=u_pos,lpipes=l_pos)
             pygame.event.post(playermove)
-            agent.draw(SCREEN)
+            agent.draw_points(SCREEN)
         ############################# gameplay
         
 
@@ -363,6 +363,8 @@ def showGameOverScreen(crashInfo):
     playerAccY = 2
     playerRot = crashInfo['playerRot']
     playerVelRot = 7
+    #print(score)
+    agent.fail()
 
     basex = crashInfo['basex']
 
@@ -430,11 +432,9 @@ def playerShm(playerShm):
 def getRandomPipe():
     """returns a randomly generated pipe"""
     # y of gap between upper and lower pipe
-    gapY = random.randrange(0, int(BASEY * 0.6 - PIPEGAPSIZE))
-    gapY += int(BASEY * 0.2)
     pipeHeight = IMAGES['pipe'][0].get_height()
     pipeX = SCREENWIDTH + 10
-    
+
     # Hi, Clay here
     percentTogether = 5.0 # Edit this to pwn the game
     upY = (BASEY / 2) * (percentTogether / 100.0) - pipeHeight
@@ -482,6 +482,8 @@ def checkCrash(player, upperPipes, lowerPipes):
 
     # if player crashes into ground
     if player['y'] + player['h'] >= BASEY - 1:
+        return [True, True]
+    elif player['y'] + player['h'] <= 0:
         return [True, True]
     else:
 
