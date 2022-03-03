@@ -5,20 +5,25 @@ import sys
 import pygame
 from pygame.locals import *
 
-from agent import Agent
+from tdnsarsa import TDNSarsa
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 1
+SPEEDUP_FACTOR = 25
 
 FPS = 30 * SPEEDUP_FACTOR
 SCREENWIDTH  = 288
 SCREENHEIGHT = 512
-PIPEGAPSIZE  = 100 # gap between upper and lower part of pipe
+PIPEGAPSIZE  = 175 # gap between upper and lower part of pipe
 BASEY        = SCREENHEIGHT * 0.79
 # image, sound and hitmask  dicts
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
-agent = Agent(speedup_factor=SPEEDUP_FACTOR, xpos=int(SCREENWIDTH * .20), ypos_min=0, ypos_max=BASEY,
-              yvel_min=-10, yvel_max=10, dx_max=SCREENWIDTH + 200 + (SCREENWIDTH / 2))
+
+
+from td1sarsa import TD1Sarsa
+agent = TD1Sarsa(speedup_factor=SPEEDUP_FACTOR, xpos=int(SCREENWIDTH * .20), ypos_min=0, ypos_max=BASEY,
+                 yvel_min=-10, yvel_max=10, dx_max=SCREENWIDTH-int(SCREENWIDTH * .20),
+                 pipec_min=int(BASEY * 0.2)+PIPEGAPSIZE/2,
+                 pipec_max=int(BASEY * 0.6 - PIPEGAPSIZE)-1+int(BASEY * 0.2)+PIPEGAPSIZE/2)
 
 
 # list of all possible players (tuple of 3 positions of flap)
@@ -168,6 +173,8 @@ def showWelcomeAnimation():
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
+                agent.save()
+                print('saved q_sarsa')
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 # make first flap sound and return values for mainGame
@@ -227,24 +234,26 @@ def mainGame(movementInfo):
         {'x': SCREENWIDTH + 200 + (SCREENWIDTH / 2), 'y': newPipe2[1]['y']},
     ]
 
-    dt = FPSCLOCK.tick(FPS * SPEEDUP_FACTOR)/1000
-    pipeVelX = (-128 * dt) * SPEEDUP_FACTOR
+    dt = FPSCLOCK.tick(FPS)/1000
+    pipeVelX = (-128 * dt)
 
     # player velocity, max velocity, downward acceleration, acceleration on flap
-    playerVelY    = -9 * SPEEDUP_FACTOR   # player's velocity along Y, default same as playerFlapped
-    playerMaxVelY = 10 * SPEEDUP_FACTOR  # max vel along Y, max descend speed
-    playerMinVelY = -8 * SPEEDUP_FACTOR  # min vel along Y, max ascend speed
-    playerAccY    = 1 * SPEEDUP_FACTOR  # players downward acceleration
+    playerVelY    = -9   # player's velocity along Y, default same as playerFlapped
+    playerMaxVelY = 10  # max vel along Y, max descend speed
+    playerMinVelY = -8  # min vel along Y, max ascend speed
+    playerAccY    = 1  # players downward acceleration
     playerRot     = 45 * SPEEDUP_FACTOR  # player's rotation
     playerVelRot  = 3 * SPEEDUP_FACTOR # angular speed
-    playerRotThr  = 20 * SPEEDUP_FACTOR  # rotation threshold
-    playerFlapAcc = -9 * SPEEDUP_FACTOR  # players speed on flapping
+    playerRotThr  = 20  # rotation threshold
+    playerFlapAcc = -9   # players speed on flapping
     playerFlapped = False # True when player flaps
 
     while True:
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
+                agent.save()
+                print('saved q_sarsa')
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 if playery > -2 * IMAGES['player'][0].get_height():
@@ -306,7 +315,6 @@ def mainGame(movementInfo):
         # add new pipe when first pipe is about to touch left of screen
         if 3 > len(upperPipes) > 0 and 0 < upperPipes[0]['x'] < 5:
             newPipe = getRandomPipe()
-            print(newPipe)
             upperPipes.append(newPipe[0])
             lowerPipes.append(newPipe[1])
 
@@ -340,12 +348,10 @@ def mainGame(movementInfo):
         if AGENTMODE:
             u_pos = []
             l_pos = []
-            for uPipe, lPipe in zip(upperPipes, lowerPipes):
-                u_pos.append([uPipe['x'], uPipe['y']+pipeHeight, uPipe['x']+pipeWidth, uPipe['y']+pipeHeight])
-                l_pos.append([lPipe['x'], lPipe['y'], lPipe['x']+pipeWidth, lPipe['y']])
-            playermove = agent.move(y_pos=playery,y_vel=playerVelY,upipes=u_pos,lpipes=l_pos)
+
+            playermove = agent.move(y_pos=playery,y_vel=playerVelY,
+                                    upipes=upperPipes,lpipes=lowerPipes, score=score)
             pygame.event.post(playermove)
-            agent.draw_points(SCREEN)
         ############################# gameplay
         
 
@@ -364,7 +370,7 @@ def showGameOverScreen(crashInfo):
     playerRot = crashInfo['playerRot']
     playerVelRot = 7
     #print(score)
-    agent.fail()
+    agent.gameover(score)
 
     basex = crashInfo['basex']
 
@@ -382,6 +388,8 @@ def showGameOverScreen(crashInfo):
         for event in pygame.event.get():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
+                agent.save()
+                print('saved q_sarsa')
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 if playery + playerHeight >= BASEY - 1:
@@ -434,7 +442,6 @@ def getRandomPipe():
     # y of gap between upper and lower pipe
     pipeHeight = IMAGES['pipe'][0].get_height()
     pipeX = SCREENWIDTH + 10
-
     # Hi, Clay here
     percentTogether = 5.0 # Edit this to pwn the game
     upY = (BASEY / 2) * (percentTogether / 100.0) - pipeHeight
@@ -446,7 +453,7 @@ def getRandomPipe():
     ]
 
 
-def oldgetRandomPipe():
+def ffgetRandomPipe():
     """returns a randomly generated pipe"""
     # y of gap between upper and lower pipe
     gapY = random.randrange(0, int(BASEY * 0.6 - PIPEGAPSIZE))
@@ -538,3 +545,4 @@ def getHitmask(image):
 
 if __name__ == '__main__':
     main()
+    print("hefllo")

@@ -1,0 +1,9 @@
+self.pos_x = xpos
+self.ypos_min = ypos_min
+self.ypos_max = ypos_max
+self.yvel_min = yvel_min
+self.yvel_max = yvel_max
+self.dx_max = dx_max
+self.pipec_min = pipec_min
+self.pipec_max = pipec_max
+self.pipe_height = 320
