@@ -8,8 +8,7 @@ import numpy as np
 from typing import List, Tuple
 
 READ_CACHE = True
-RESET_EPSILON_GREEDY = False
-EPSILON_START = 0.3
+RESET_EPSILON_START = -1 # -1 FALSE
 
 t_epsilon = 0.001  # sec
 t_between_states = 0.05  # sec

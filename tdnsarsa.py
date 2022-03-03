@@ -9,7 +9,8 @@ from typing import List, Tuple
 
 READ_CACHE = False
 RESET_EPSILON_GREEDY = True
-EPSILON_START = 0.1
+EPSILON_START = 0 
+
 
 t_epsilon = 0.001  # sec
 t_between_states = 0.05  # sec

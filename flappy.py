@@ -4,11 +4,12 @@ from re import U
 import sys
 import pygame
 from pygame.locals import *
+from agent import Agent
 
 from tdnsarsa import TDNSarsa
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 25
+SPEEDUP_FACTOR = 10
 
 FPS = 30 * SPEEDUP_FACTOR
 SCREENWIDTH  = 288
@@ -19,11 +20,8 @@ BASEY        = SCREENHEIGHT * 0.79
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
 
 
-from td1sarsa import TD1Sarsa
-agent = TD1Sarsa(speedup_factor=SPEEDUP_FACTOR, xpos=int(SCREENWIDTH * .20), ypos_min=0, ypos_max=BASEY,
-                 yvel_min=-10, yvel_max=10, dx_max=SCREENWIDTH-int(SCREENWIDTH * .20),
-                 pipec_min=int(BASEY * 0.2)+PIPEGAPSIZE/2,
-                 pipec_max=int(BASEY * 0.6 - PIPEGAPSIZE)-1+int(BASEY * 0.2)+PIPEGAPSIZE/2)
+from agent import Agent
+agent = Agent(speedup_factor=SPEEDUP_FACTOR)
 
 
 # list of all possible players (tuple of 3 positions of flap)
@@ -242,8 +240,8 @@ def mainGame(movementInfo):
     playerMaxVelY = 10  # max vel along Y, max descend speed
     playerMinVelY = -8  # min vel along Y, max ascend speed
     playerAccY    = 1  # players downward acceleration
-    playerRot     = 45 * SPEEDUP_FACTOR  # player's rotation
-    playerVelRot  = 3 * SPEEDUP_FACTOR # angular speed
+    playerRot     = 45 # player's rotation
+    playerVelRot  = 3  # angular speed
     playerRotThr  = 20  # rotation threshold
     playerFlapAcc = -9   # players speed on flapping
     playerFlapped = False # True when player flaps
@@ -346,11 +344,9 @@ def mainGame(movementInfo):
 
         ############################# agent plays here
         if AGENTMODE:
-            u_pos = []
-            l_pos = []
-
             playermove = agent.move(y_pos=playery,y_vel=playerVelY,
-                                    upipes=upperPipes,lpipes=lowerPipes, score=score)
+                                    lpipes=lowerPipes.copy(), upipes=upperPipes.copy(),
+                                    score=score)
             pygame.event.post(playermove)
         ############################# gameplay
         
