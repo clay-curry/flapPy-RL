@@ -1,10 +1,7 @@
-from lib2to3.pgen2.token import PERCENT
-import math
-from tkinter import Y
+import numpy as np
 from typing import List
 import pygame
 import time
-import numpy as np
 
 # Gameplay Attributes
 SCREENWIDTH  = 288
@@ -39,10 +36,10 @@ NUM_STATES = NUM_Y_STATES * NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES
 
 
 # Training Hyperparameters
-T_BETWEEN_STATES = 0.01
-DISCOUNT = 0.3
-STEP_SIZE = 0.2
-N_STEPS = 1
+T_BETWEEN_STATES = 0.2
+DISCOUNT = 0.2
+STEP_SIZE = 0.3
+N_STEPS = 5
 
 # Checkpointing and debugging
 CHECKPOINT_DT   = 5 * 60     # every 5 minutes
@@ -51,10 +48,10 @@ RESET_EPSILON_GREEDY = False
 EPSILON_START = 0.05
 STATES_BETWEEN_LOG = 1
 
+EPSILON = (np.ones(NUM_STATES) * EPSILON_START).tolist()
 
-no_flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
-flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
-
+FLAP = True
+NO_FLAP = False
 # Learns on policy
 class Agent:
     def __init__(self, speedup_factor=1):
@@ -68,100 +65,80 @@ class Agent:
         self.prev_reward: List[float] = []
         self.prev_action: List[int] = []
         self.q_state_action_epsilon = []
-        self.make_vectors()
+        if READ_CACHE:
+            self.read_cache()
+        if self.q_state_action_epsilon == []:
+            self.make_vectors()
+        print("Created agent")
     
                                     
-    def move(self, y_pos, y_vel, lpipes, upipes, score):
-
-        print('inside move')
-
-        now_ts = time.time_ns() / (10 ** 9)
-        self.score = score
-        
-        d_state = now_ts - self.last_state_update_ts
-        threshold = T_BETWEEN_STATES / self.speedup_factor
-        action = False
-        if d_state > threshold:           
-            
-            # always look forward, never back
-            if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
+    def move(self, y_pos, y_vel, lpipes, upipes, score):        
+        next_move = NO_FLAP
+        # remove past pipes
+        if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
                 lpipes.pop()
-                       
-            
+
+        now_ts = time.time_ns() / (10 ** 9)        
+        state_dt = now_ts - self.last_state_update_ts
+        if state_dt > T_BETWEEN_STATES / self.speedup_factor:           
+            self.last_state_update_ts = now_ts
+            self.score = score       
             state = self.compute_state(
                 y_pos=y_pos, y_vel=y_vel, 
                 lpipe_x=lpipes[0]['x'], lpipe_y=lpipes[0]['y'],
                 upipe_y=upipes[0]['y'] + PIPEHEIGHT,
                 as_index=True
                 )
-            
-        
-            reward = self.compute_reward(y_pos=y_pos,  
-            lpipe_y=lpipes[0]['y'],
-            upipe_y=upipes[0]['y'] + PIPEHEIGHT)
-            
-            self.last_state_update_ts = now_ts
-            self.breakpoint_count = (self.breakpoint_count + 1) % STATES_BETWEEN_LOG
-            
-            if self.breakpoint_count == 0:
-                print(f'Y_POS, Y_VEL, DX, C_PIPE = {state[1]}', end=" ")
-                print(f'Reward = {reward}')
-                print(self.q_state_action_epsilon[state[0]])
-                print()
-            
-                
-            q = self.q_state_action_epsilon[state[0]]
-            # HEREEEE
-            
 
-            action = epsilon_greedy(
+            reward = self.compute_reward(y_pos=y_pos,  
+                lpipe_y=lpipes[0]['y'],
+                upipe_y=upipes[0]['y'] + PIPEHEIGHT
+                )   
+                             
+            next_move = epsilon_greedy(
                 q_noflap=self.q_state_action_epsilon[state[0]][0], 
                 q_flap=self.q_state_action_epsilon[state[0]][1], 
                 epsilon=self.q_state_action_epsilon[state[0]][2])
 
 
             self.prev_reward.append(reward)
-            self.prev_action.append(action)
+            self.prev_action.append(next_move)
             self.prev_state.append(state[0])
+            
+            self.breakpoint_count = (self.breakpoint_count + 1) % STATES_BETWEEN_LOG
+            if self.breakpoint_count == 0:
+                print(f'Y_POS, Y_VEL, DX, C_PIPE = {state[1]} ({state[0]})', end=" ")
+                print(f'Reward = {reward}')
+                print(self.q_state_action_epsilon[state[0]])
+                print(next_move)
+                print()
+
             self.sarsa()
 
-            
-
-
-
-        return flap if action else no_flap
+        no_flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
+        flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
+        return flap if next_move else no_flap
 
     def sarsa(self) -> bool:
-        print('inside sarsa')
-        if not ((np.ones(NUM_STATES) * EPSILON_START) == self.q_state_action_epsilon[:,2]).all():
-                print("something happened")
-        if len(self.prev_state) > N_STEPS:
-            state_tn = self.prev_state.pop(0)
-            action_tn = int(self.prev_action.pop(0))
-            self.prev_reward.pop(0)
-            Qn = self.q_state_action_epsilon[state_tn][action_tn]
-            
-            # Compute the discounted sum of n rewards
-            G_terms = [self.prev_reward[k] * DISCOUNT**k for k in range(N_STEPS)]
-            G_tn = sum(G_terms)
-            
-            Qn += STEP_SIZE * (G_tn - Qn)
-            if not ((np.ones(NUM_STATES) * EPSILON_START) == self.q_state_action_epsilon[:,2]).all():
-                print("something happened")
-                for state in range(NUM_STATES):
-                    if self.q_state_action_epsilon[state][2] != 0.05:
-                        print(state)
-                        print(self.q_state_action_epsilon[state])
-            self.q_state_action_epsilon[state_tn][action_tn] = Qn
-            if not ((np.ones(NUM_STATES) * EPSILON_START) == self.q_state_action_epsilon[:,2]).all():
-                print("something happened")
-        
+            if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
+                raise ValueError
+            if len(self.prev_state) > N_STEPS:
+                state_tn = self.prev_state.pop(0)
+                action_tn = int(self.prev_action.pop(0))
+                self.prev_reward.pop(0)
+                Qn = self.q_state_action_epsilon[state_tn][action_tn]
+                
+                # Compute the discounted sum of n rewards
+                G_terms = [self.prev_reward[k] * DISCOUNT**k for k in range(N_STEPS)]
+                G_tn = sum(G_terms)
+                
+                Qn += STEP_SIZE * (G_tn + - Qn)
+                self.q_state_action_epsilon[state_tn][action_tn] = Qn
+            if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
+                raise ValueError
 
 
     def compute_state(self, y_pos, y_vel, lpipe_x, lpipe_y, upipe_y, as_index=False):
-        print('inside compute_state')
-        if not ((np.ones(NUM_STATES) * EPSILON_START) == self.q_state_action_epsilon[:,2]).all():
-                print("something happened")
         try:
             Y_POS = map_bin(
                 x=y_pos,
@@ -204,13 +181,12 @@ class Agent:
         return index, (Y_POS, Y_VEL, DX, C_PIPE)
 
     def compute_reward(self, y_pos, lpipe_y, upipe_y):
-        print('inside compute_reward')
-#return 1
+        #return 1
+        from math import sqrt
         dx = (lpipe_y + upipe_y) / 2 - y_pos
-        return -math.sqrt(abs(dx)) ** 6 / BASEY
+        return -sqrt(abs(dx)) ** 3 / BASEY + 10
 
     def save(self):
-        print('inside save')
         from datetime import datetime
         today = datetime.now()
         d1 = today.strftime("%m-%d-%Y %H.%M.%S")
@@ -222,30 +198,27 @@ class Agent:
         print(self.episode)
 
     def gameover(self, score):
-        print('inside gameover')
         print(f'GAMEOVER: score = {score}')
-        if not ((np.ones(NUM_STATES) * EPSILON_START) == self.q_state_action_epsilon[:,2]).all():
-                        raise ValueError()
+        if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
+                raise ValueError
         # Adjust values on remaining states
         num_states = len(self.prev_state)
-        # Losing resulted in the lowest reward
-        min_reward = self.q_state_action_epsilon.min() - 10
+        min_reward = 0
+        print(f'min reward = {min_reward}')
         self.prev_reward.append(min_reward)
         self.prev_reward.pop(0) # remove R_1
 
-        discount = DISCOUNT
         R_t = 0
         G_t = 0
         for t in range(num_states-1, -1, -1):
             action = self.prev_action.pop(t)
             state = self.prev_state.pop(t)
             R_t = self.prev_reward.pop(t)  # return from Q_
-            G_t = R_t + discount * G_t     # discounted return
-
+            G_t = R_t + DISCOUNT * G_t     # discounted return
             Qt = self.q_state_action_epsilon[state][action]
             Qt += STEP_SIZE * (G_t - Qt)
             self.q_state_action_epsilon[state][action] = Qt
-
+            
         # Save last round
         self.episode.append(score)
         now = time.time_ns() / (10 ** 9)
@@ -253,40 +226,22 @@ class Agent:
             self.last_backup = now
             self.save()
 
+        if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
+                raise ValueError
+
     def make_vectors(self):
-        print('inside make_vectors')
-        if READ_CACHE:
-            try:
-                from os import listdir
-                names = listdir("tdn_full")  # read most recent list
-                name = names[len(names) - 1]
-                with open(f"tdn_full/{name}", 'rb') as f:
-                    self.q_state_action_epsilon = np.load(f, allow_pickle=True)
-                    self.episode = list(np.load(f, allow_pickle=True))
-                    self.hyperparameters = list(np.load(f, allow_pickle=True))
-
-                if RESET_EPSILON_GREEDY:
-                    self.q_state_action_epsilon[:, 2] = np.ones(NUM_STATES) * EPSILON_START
-
-                print(self.q_state_action_epsilon)
-                print(self.episode)
-                print(self.hyperparameters)
-                return
-            except:
-                pass
-
         # random
         self.hyperparameters = [
             DISCOUNT, STEP_SIZE, N_STEPS, NUM_Y_STATES, NUM_V_STATES,
             NUM_DX_STATES, NUM_PIPE_STATES, NUM_STATES, EPSILON_START
         ]
         self.q_state_action_epsilon = np.insert(
-            arr=np.random.normal(loc=0, scale=1, size=(NUM_STATES,2)),
+            arr=np.random.normal(loc=10, scale=1, size=(NUM_STATES,2)),
             obj=2,
             values=np.ones(NUM_STATES) * EPSILON_START,  # epsilon
-            axis=1)
+            axis=1).tolist()
 
-        for j in range(NUM_V_STATES):
+        """for j in range(NUM_V_STATES):
             for k in range(NUM_DX_STATES):
                 for g in range(NUM_PIPE_STATES):
                     for i in range(int(NUM_Y_STATES * 0.7)):
@@ -295,13 +250,31 @@ class Agent:
                         index += k * (NUM_PIPE_STATES)
                         index += j * (NUM_DX_STATES * NUM_PIPE_STATES)
                         index += i * (NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES)
-                        self.q_state_action_epsilon[index][1] = -1
+                        self.q_state_action_epsilon[index][1] = -10"""
 
+    def read_cache(self):
+        try:
+            from os import listdir
+            names = listdir("tdn_full")  # read most recent list
+            name = names[len(names) - 1]
+            with open(f"tdn_full/{name}", 'rb') as f:
+                self.q_state_action_epsilon = np.load(f, allow_pickle=True).tolist()
+                self.episode = np.load(f, allow_pickle=True).tolist()
+                self.hyperparameters = np.load(f, allow_pickle=True).tolist()
+
+            if RESET_EPSILON_GREEDY:
+                self.q_state_action_epsilon[:, 2] = np.ones(NUM_STATES) * EPSILON_START
+
+            print(self.q_state_action_epsilon)
+            print(self.episode)
+            print(self.hyperparameters)
+            return
+        except:
+            pass
 
 def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
-            
             f=lambda x: x, one_indexed=False, enforce_bounds=True):
-    print('inside map_bin')
+    # Sanity check
     if minimum > maximum:
         raise ValueError("minimum was not less than maximum")
     elif n_bins <= 0:
@@ -317,35 +290,33 @@ def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
         else:
             x = maximum
 
+    # map to bin
+    from math import floor
     _hash = (x - minimum) / (maximum - minimum)
-    _hash = _hash if _hash < 0.001 else _hash - 0.001
+    _hash = _hash if _hash < 0.0000001 else _hash - 0.0000001
     _hash = f(_hash) * n_bins
-    _hash = math.floor(_hash)
+    _hash = floor(_hash)
     if one_indexed:
         return _hash + 1
     else:
         return _hash
 
 
-def epsilon_greedy(q_noflap, q_flap, epsilon):
-    
-    print('inside epsilon_greedy')
-    
-    if epsilon > 1:
-        raise ValueError("epsilon > 1")
-    if epsilon < 0:
-        raise ValueError("epsilon < 0")
-    # returns True for flap and False for no_flap
-    if abs(q_flap - q_noflap) < 0.001:
-        # if neither are greedy, pick random
-        return np.random.uniform(0, 1) < .5
+def epsilon_greedy(q_noflap, q_flap, epsilon):    
+    # Sanity check
+    if epsilon < 0 or 1 < epsilon:
+        raise ValueError(f"epsilon = {epsilon} which is not in [0,1]")
 
-    # determine greedy state and return it with p = 1 - epsilon
-    greedy = q_flap > q_noflap
-    if np.random.uniform(0, 1) > epsilon:
-        return greedy
-    else:
+    # Determine greedy state
+    greedy = NO_FLAP
+    if q_noflap < q_flap:
+        greedy = FLAP
+
+    # Return greedy state with p = 1 - epsilon
+    if np.random.uniform(0, 1) < epsilon:
         return not greedy
+    else:
+        return greedy
 
 
 
