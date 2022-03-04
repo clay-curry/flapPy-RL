@@ -30,13 +30,13 @@ X_MAX_PIPE   = SCREENWIDTH - X_POS_AGENT
 # (Discretized) State Attributes
 NUM_Y_STATES = 10                   # encodes height of player (this should be odd for keeping in center)
 NUM_V_STATES = 10                   # encodes player velocity
-NUM_DX_STATES = 10                   # encodes distance from pipe to player
+NUM_DX_STATES = 1                   # encodes distance from pipe to player
 NUM_PIPE_STATES = 1                 # encodes center position between pipes
 NUM_STATES = NUM_Y_STATES * NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES
 
 
 # Training Hyperparameters
-T_BETWEEN_STATES = 0.2
+T_BETWEEN_STATES = .1
 DISCOUNT = 0.2
 STEP_SIZE = 0.3
 N_STEPS = 5
@@ -47,6 +47,7 @@ READ_CACHE = False
 RESET_EPSILON_GREEDY = False
 EPSILON_START = 0.05
 STATES_BETWEEN_LOG = 1
+LOG = True
 
 EPSILON = (np.ones(NUM_STATES) * EPSILON_START).tolist()
 
@@ -54,13 +55,14 @@ FLAP = True
 NO_FLAP = False
 # Learns on policy
 class Agent:
-    def __init__(self, speedup_factor=1):
-        now_ts = time.time_ns() / (10 ** 9)    # used to discretize game
-        self.last_state_update_ts = now_ts        # used to discretize game
-        self.last_backup = now_ts
-        self.episode = [] # (eps num, score)       # used for gathering data
+    def __init__(self, FPS):
+        self.FPS = FPS
+        self.number_frames_between_actions = int(FPS * T_BETWEEN_STATES)        # used to discretize game
+        self.frame_count = 0
         self.breakpoint_count = 0
-        self.speedup_factor = speedup_factor
+        self.last_backup = time.time()
+        
+        self.episode = [] # (eps num, score)       # used for gathering data
         self.prev_state: List[int] = []
         self.prev_reward: List[float] = []
         self.prev_action: List[int] = []
@@ -73,70 +75,45 @@ class Agent:
     
                                     
     def move(self, y_pos, y_vel, lpipes, upipes, score):        
+        self.frame_count = (self.frame_count + 1) % self.number_frames_between_actions        
         next_move = NO_FLAP
-        # remove past pipes
-        if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
-                lpipes.pop()
+        
+        if self.frame_count == 0:
+            print("action")
+            # remove past pipes
+            if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
+                    lpipes.pop()
 
-        now_ts = time.time_ns() / (10 ** 9)        
-        state_dt = now_ts - self.last_state_update_ts
-        if state_dt > T_BETWEEN_STATES / self.speedup_factor:           
-            self.last_state_update_ts = now_ts
             self.score = score       
-            state = self.compute_state(
-                y_pos=y_pos, y_vel=y_vel, 
-                lpipe_x=lpipes[0]['x'], lpipe_y=lpipes[0]['y'],
-                upipe_y=upipes[0]['y'] + PIPEHEIGHT,
-                as_index=True
-                )
+            state = self.compute_state(y_pos=y_pos, y_vel=y_vel, lpipe_x=lpipes[0]['x'], lpipe_y=lpipes[0]['y'], upipe_y=upipes[0]['y'] + PIPEHEIGHT, as_index=True)
+            reward = self.compute_reward(y_pos=y_pos, lpipe_y=lpipes[0]['y'], upipe_y=upipes[0]['y'] + PIPEHEIGHT)
+            next_move = self.compute_action(q_noflap=self.q_state_action_epsilon[state[0]][0], q_flap=self.q_state_action_epsilon[state[0]][1], epsilon=self.q_state_action_epsilon[state[0]][2])
 
-            reward = self.compute_reward(y_pos=y_pos,  
-                lpipe_y=lpipes[0]['y'],
-                upipe_y=upipes[0]['y'] + PIPEHEIGHT
-                )   
-                             
-            next_move = epsilon_greedy(
-                q_noflap=self.q_state_action_epsilon[state[0]][0], 
-                q_flap=self.q_state_action_epsilon[state[0]][1], 
-                epsilon=self.q_state_action_epsilon[state[0]][2])
-
-
-            self.prev_reward.append(reward)
-            self.prev_action.append(next_move)
-            self.prev_state.append(state[0])
-            
-            self.breakpoint_count = (self.breakpoint_count + 1) % STATES_BETWEEN_LOG
-            if self.breakpoint_count == 0:
-                print(f'Y_POS, Y_VEL, DX, C_PIPE = {state[1]} ({state[0]})', end=" ")
-                print(f'Reward = {reward}')
-                print(self.q_state_action_epsilon[state[0]])
-                print(next_move)
-                print()
+            if LOG:
+                self.log(state=state, reward=reward, next_move=next_move)
 
             self.sarsa()
 
         no_flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
         flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
         return flap if next_move else no_flap
-
+    
+    
     def sarsa(self) -> bool:
-            if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
-                raise ValueError
-            if len(self.prev_state) > N_STEPS:
-                state_tn = self.prev_state.pop(0)
-                action_tn = int(self.prev_action.pop(0))
-                self.prev_reward.pop(0)
-                Qn = self.q_state_action_epsilon[state_tn][action_tn]
-                
-                # Compute the discounted sum of n rewards
-                G_terms = [self.prev_reward[k] * DISCOUNT**k for k in range(N_STEPS)]
-                G_tn = sum(G_terms)
-                
-                Qn += STEP_SIZE * (G_tn + - Qn)
-                self.q_state_action_epsilon[state_tn][action_tn] = Qn
-            if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
-                raise ValueError
+        if len(self.prev_state) > N_STEPS:
+            state_tn = self.prev_state.pop(0)
+            action_tn = int(self.prev_action.pop(0))
+            self.prev_reward.pop(0)
+            Q1 = self.q_state_action_epsilon[state_tn][action_tn]
+            
+            # Compute the discounted sum of n rewards
+            G_terms = [self.prev_reward[k] * DISCOUNT**k for k in range(N_STEPS)]
+            G_tn = sum(G_terms)
+            QN = max(self.q_state_action_epsilon[self.prev_state[N_STEPS-1]][0:2])
 
+            Q1 = Q1 + STEP_SIZE * (G_tn + (DISCOUNT**N_STEPS)*QN - Q1)
+            self.q_state_action_epsilon[state_tn][action_tn] = Q1
+        
 
     def compute_state(self, y_pos, y_vel, lpipe_x, lpipe_y, upipe_y, as_index=False):
         try:
@@ -178,13 +155,22 @@ class Agent:
         index += DX * (NUM_PIPE_STATES)
         index += Y_VEL * (NUM_DX_STATES * NUM_PIPE_STATES)
         index += Y_POS * (NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES)
+        self.prev_state.append(index)
         return index, (Y_POS, Y_VEL, DX, C_PIPE)
 
     def compute_reward(self, y_pos, lpipe_y, upipe_y):
         #return 1
         from math import sqrt
         dx = (lpipe_y + upipe_y) / 2 - y_pos
-        return -sqrt(abs(dx)) ** 3 / BASEY + 10
+        reward = -sqrt(abs(dx)) ** 3 / BASEY + 10
+        self.prev_reward.append(reward)
+        return reward
+
+    def compute_action(self, q_noflap, q_flap, epsilon):
+        action = epsilon_greedy(q_noflap, q_flap, epsilon)
+        self.prev_action.append(action)
+        return action
+
 
     def save(self):
         from datetime import datetime
@@ -199,35 +185,27 @@ class Agent:
 
     def gameover(self, score):
         print(f'GAMEOVER: score = {score}')
-        if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
-                raise ValueError
-        # Adjust values on remaining states
-        num_states = len(self.prev_state)
-        min_reward = 0
-        print(f'min reward = {min_reward}')
-        self.prev_reward.append(min_reward)
-        self.prev_reward.pop(0) # remove R_1
-
-        R_t = 0
-        G_t = 0
-        for t in range(num_states-1, -1, -1):
-            action = self.prev_action.pop(t)
-            state = self.prev_state.pop(t)
-            R_t = self.prev_reward.pop(t)  # return from Q_
-            G_t = R_t + DISCOUNT * G_t     # discounted return
-            Qt = self.q_state_action_epsilon[state][action]
-            Qt += STEP_SIZE * (G_t - Qt)
-            self.q_state_action_epsilon[state][action] = Qt
-            
-        # Save last round
         self.episode.append(score)
+        print(f'Number Episodes = {len(self.episode)}')
         now = time.time_ns() / (10 ** 9)
+        if len(self.episode) > 100:
+            self.save()
+            exit(0)
+        self.prev_action = []
+        self.prev_reward = []
+        self.prev_state = []
         if now - self.last_backup > CHECKPOINT_DT:
             self.last_backup = now
             self.save()
 
-        if [e[2] for e in self.q_state_action_epsilon] != EPSILON:
-                raise ValueError
+    def log(self, state, reward, next_move) -> None:
+        self.breakpoint_count = (self.breakpoint_count + 1) % STATES_BETWEEN_LOG
+        if self.breakpoint_count == 0:
+            print(f'Y_POS, Y_VEL, DX, C_PIPE = {state[1]} ({state[0]})', end=" ")
+            print(f'Reward = {reward}')
+            print(self.q_state_action_epsilon[state[0]])
+            print(next_move)
+            print()
 
     def make_vectors(self):
         # random
