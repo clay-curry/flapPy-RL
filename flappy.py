@@ -4,14 +4,16 @@ from re import U
 import sys
 import pygame
 from pygame.locals import *
-from agent import Agent
+from rl.agent import Agent
 
-from tdnsarsa import TDNSarsa
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
 SPEEDUP_FACTOR = 10
-
+from rl.agent import Agent
 FPS = 30 * SPEEDUP_FACTOR
+agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
+
+
 SCREENWIDTH  = 288
 SCREENHEIGHT = 512
 PIPEGAPSIZE  = 175 # gap between upper and lower part of pipe
@@ -20,9 +22,6 @@ BASEY        = SCREENHEIGHT * 0.79
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
 
 
-from agent import Agent
-from watchpoints import watch
-agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
 # list of all possible players (tuple of 3 positions of flap)
 PLAYERS_LIST = (
@@ -344,22 +343,11 @@ def mainGame(movementInfo):
 
         ############################# agent plays here
         if AGENTMODE:
-            if score > 10 mkk0:
-                return {
-                'y': playery,
-                'groundCrash': False,
-                'basex': basex,
-                'upperPipes': upperPipes,
-                'lowerPipes': lowerPipes,
-                'score': score,
-                'playerVelY': playerVelY,
-                'playerRot': playerRot
-                }
             playermove = agent.move(y_pos=playery,y_vel=playerVelY,
                                     lpipes=lowerPipes.copy(), upipes=upperPipes.copy(),
                                     score=score)
             pygame.event.post(playermove)
-        ############################# gameplay
+        ############################# return to gameplay
 
         pygame.display.update()
         FPSCLOCK.tick_busy_loop(FPS)
