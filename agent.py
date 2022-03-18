@@ -29,7 +29,7 @@ VALUES = torch.ones(
     size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
 )
 
-
+print(torch.ones(2,2,3))
 
 # Hyperparameters
 DISCOUNT            = 0.9
@@ -167,10 +167,10 @@ class Agent:
                 for x in range(NUM_DX_STATES):
                     for p in range(NUM_PIPE_STATES):
                         UPDATE = LEARNING_RATE * ELIGIBILITY_TRACE[y][v][x][p][0] * delta
-                        VALUE_NO_FLAP[y,v,x,p] += UPDATE
+                        VALUE_NO_FLAP[y][v][x][p] += UPDATE
                         UPDATE = LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,1] * delta
-                        VALUE_FLAP[y,v,x,p] += UPDATE
-                        ELIGIBILITY_TRACE[y,v,x,p] *= LAMBDA * LEARNING_RATE
+                        VALUE_FLAP[y][v][x][p] += UPDATE
+                        ELIGIBILITY_TRACE[y][v][x][p] *= LAMBDA * LEARNING_RATE
 
     def gameover(self, score):
         now = time.time_ns() / (10 ** 9)

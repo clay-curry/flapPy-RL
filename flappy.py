@@ -9,7 +9,7 @@ from meta import *
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
 SPEEDUP_FACTOR = 1
-from rl.agent import Agent
+from agent import Agent
 FPS = 30 * SPEEDUP_FACTOR
 agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
