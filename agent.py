@@ -1,35 +1,23 @@
+from math import exp, pi
 import numpy as np
 from typing import List
 import pygame
 import time
 import meta
 import torch
+print(torch.cuda.is_available())
 
 # States
 NUM_Y_STATES = 10                   # encodes height of player (this should be odd for keeping in center)
 NUM_V_STATES = 10                   # encodes player velocity
-NUM_DX_STATES = 1                   # encodes distance from pipe to player
-NUM_PIPE_STATES = 1                 # encodes center position between pipes
+NUM_DX_STATES = 10                   # encodes distance from pipe to player
+NUM_PIPE_STATES = 8                 # encodes center position between pipes
 NUM_ACTIONS = 2
 
 # Actions
 FLAP = True
 NO_FLAP = False
 
-# Values
-LOAD_CACHE = False
-VALUE_FLAP = torch.zeros(
-    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES)
-)
-VALUE_NO_FLAP = torch.ones(
-    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES)
-)
-
-VALUES = torch.ones(
-    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
-)
-
-print(torch.ones(2,2,3))
 
 # Hyperparameters
 DISCOUNT            = 0.9
@@ -40,10 +28,12 @@ STEP_SIZE           = 0.3
 USE_N_STEP_SARSA    = True      # enable value iteration using n-step SARSA 
 N_STEPS             = 5         # Q(S,A) <- Q(S,A) + LEARNING_RATE*(R1+R2+...+RN+DISCOUNT*Q(S',A')-Q(S,A))
 USE_TD_LAMBDA       = False
-LAMBDA              = 0.6
-ELIGIBILITY_TRACE = torch.zeros(
-    size = (NUM_DX_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
-)
+LAMBDA              = 0.8
+
+VALUES = torch.ones(
+    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
+ )
+ELIGIBILITY_TRACES = torch.zeros_like(VALUES)
 
 
 # Learns on policy
@@ -55,10 +45,12 @@ class Agent:
         self.breakpoint_count = 0
         self.last_backup = time.time()
         self.episode = [] # (eps num, score)
-        self.prev_SAR = (0, 0, 0)
+        self.prev_SAR = None
+        
+        self.VALUES = VALUES
+        self.ELIGIBILITY_TRACES = ELIGIBILITY_TRACES   
         print("Created agent")
-    
-                                    
+                                      
     def move(self, y_pos, y_vel, x_pipe, y_pipe, score):        
         next_move = NO_FLAP
         self.frame_count += 1 
@@ -73,15 +65,10 @@ class Agent:
             
             if meta.LOG:
                 self.breakpoint_count = (self.breakpoint_count + 1) % meta.STATES_BETWEEN_LOG
-                log(state=state, reward=reward, next_move=next_move) if self.breakpoint_count == 0 else None
+                self.log(state=state, reward=reward, next_move=next_move) if self.breakpoint_count == 0 else None
                     
-
             # self.sarsa()
             self.sarsa_lambda(reward_now=reward, state_now=state, action_now=next_move)
-            self.prev_SAR = (state, next_move, reward)
-
-
-
 
         no_flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
         flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
@@ -127,14 +114,15 @@ class Agent:
     def compute_reward(self, y_pos, y_pipe):
         #return 1
         from math import sqrt
+        sigma = 60
         dx = y_pipe - y_pos
-        reward = -sqrt(abs(dx)) ** 3 / meta.BASEY + 10
+        reward = exp(- (dx**2) / (2 * sigma**2) )
         return reward
 
     def compute_action(self, state):
-        q_no_flap = VALUE_NO_FLAP[state[0]][state[1]][state[2]][state[3]]
-        q_flap = VALUE_FLAP[state[0]][state[1]][state[2]][state[3]]
-        action = epsilon_greedy(q_no_flap, q_flap, 0)
+        q_no_flap = self.VALUES[state][0]
+        q_flap = self.VALUES[state][1]
+        action = epsilon_greedy(q_no_flap, q_flap, 0.05)
         return action
 
     def sarsa(self):
@@ -153,46 +141,60 @@ class Agent:
             self.q_state_action_epsilon[state_tn][action_tn] = Q1
 
     def sarsa_lambda(self, reward_now, state_now, action_now):
-        prev_state = self.prev_SAR[0]
-        prev_action = self.prev_SAR[1]
+        if self.prev_SAR is not None and len(self.prev_SAR) > 0:
+            s0 = self.prev_SAR[0]
+            a0 = self.prev_SAR[1]
+            r1 = reward_now
+            s1 = state_now
+            a1 = action_now
+            
+            Q_prev =self.VALUES[s0][int(a0)]
+            Q_now =self.VALUES[s1][int(a1)]
+            
+            self.ELIGIBILITY_TRACES[s0][int(a0)] += 1
+
+            UPDATE = LEARNING_RATE * (r1 + DISCOUNT * Q_now - Q_prev) * self.ELIGIBILITY_TRACES 
+            self.VALUES =self.VALUES + UPDATE
+            self.ELIGIBILITY_TRACES = LAMBDA * LEARNING_RATE * self.ELIGIBILITY_TRACES
         
-        Q_prev = (VALUE_NO_FLAP if prev_action == NO_FLAP else VALUE_FLAP)[prev_state]
-        Q_now = (VALUE_NO_FLAP if action_now == NO_FLAP else VALUE_FLAP)[state_now]
-
-        delta = reward_now + DISCOUNT * Q_now - Q_prev
-        ELIGIBILITY_TRACE[prev_state, int(prev_action)] += 1
-
-        for y in range(NUM_Y_STATES):
-            for v in range(NUM_V_STATES):
-                for x in range(NUM_DX_STATES):
-                    for p in range(NUM_PIPE_STATES):
-                        UPDATE = LEARNING_RATE * ELIGIBILITY_TRACE[y][v][x][p][0] * delta
-                        VALUE_NO_FLAP[y][v][x][p] += UPDATE
-                        UPDATE = LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,1] * delta
-                        VALUE_FLAP[y][v][x][p] += UPDATE
-                        ELIGIBILITY_TRACE[y][v][x][p] *= LAMBDA * LEARNING_RATE
+        self.prev_SAR = (state_now, action_now, reward_now)
 
     def gameover(self, score):
         now = time.time_ns() / (10 ** 9)
         print(f'GAMEOVER: score = {score}')
         self.episode.append(score)
         print(f'Number Episodes = {len(self.episode)}')
-        # backup values for over many training episodes
+        # backupself.VALUES for over many training episodes
         if now - self.last_backup > meta.CHECKPOINT_DT:
             self.last_backup = now
-            save(self)
+            self.save()
        
         self.prev_SAR = []
 
-def log(state, reward, next_move) -> None:
-    print(f'State = {state}')
-    print(f'Reward = {reward}')
-    q_no_flap = VALUE_NO_FLAP[state]
-    q_flap = VALUE_FLAP[state]
-    print(f'V(NO_FLAP): {q_no_flap}')
-    print(f'V(FLAP): {q_flap}')
-    print("Flap" if next_move else "No Flap")
-    print()
+    def save(self):
+        import os
+        from datetime import datetime
+        # make file
+        datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")    
+        if DIR not in os.listdir():
+            os.mkdir(DIR)
+        file_name = f"{DIR}/weights-{datetime}"
+
+        # save to file
+        d = self.VALUES
+        torch.save(d, file_name)
+
+    def log(self, state, reward, next_move) -> None:
+        print(f'State = {state}')
+        print(f'Reward = {reward}')
+        q_no_flap = self.VALUES[state][0]
+        q_flap = self.VALUES[state][1]
+        print(f'V(NO_FLAP): {q_no_flap}')
+        print(f'V(FLAP): {q_flap}')
+        print(f'E(NO_FLAP): {self.ELIGIBILITY_TRACES[state][0]}')
+        print(f'E(FLAP): {self.ELIGIBILITY_TRACES[state][1]}')
+        print("Flap" if next_move else "No Flap")
+        print()
 
 def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
             f=lambda x: x, one_indexed=False, enforce_bounds=True):
@@ -246,27 +248,10 @@ if USE_N_STEP_SARSA:
 elif USE_TD_LAMBDA:
     DIR = 'td-lambda'
 
-def save():
-    import os
-    from datetime import datetime
-    global VALUE_FLAP
-    global VALUE_NO_FLAP
-
-    # make file
-    datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")    
-    if dir not in os.getcwd():
-        os.mkdir(dir)
-    file_name = f"{dir}/weights-{datetime}"
-
-    # save to file
-    d = {'NO_FLAP': VALUE_NO_FLAP, 'FLAP': VALUE_FLAP}
-    torch.save(d, file_name)
-
-if LOAD_CACHE:
+if meta.LOAD:
     from os import listdir
     fn = listdir(DIR)
     if fn != []:    
         last = fn.pop()
-        d = torch.load(last)
-        VALUE_NO_FLAP = d['NO_FLAP']
-        VALUE_FLAP = d['FLAP']
+        VALUES = torch.load(f'{DIR}/{last}')
+        
