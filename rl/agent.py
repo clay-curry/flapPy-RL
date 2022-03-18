@@ -2,104 +2,144 @@ import numpy as np
 from typing import List
 import pygame
 import time
+import meta
+import torch
 
-# Gameplay Attributes
-SCREENWIDTH  = 288
-SCREENHEIGHT = 512
-BASEY        = SCREENHEIGHT * 0.79
-
-# Bird
-X_POS_AGENT  = 57
-Y_MIN_AGENT  = 0                    # top of screen (0 = top)
-Y_MAX_AGENT  = SCREENHEIGHT * 0.79  # where player crashes into ground
-Y_MAX_VELOCITY = 10
-Y_MIN_VELOCITY = -9
-
-# Pipes
-PERCENT_TOGETHER = 5
-PIPEHEIGHT = 320
-# PIPEGAPSIZE  = 100
-# Y_MIN_LPIPE  = int(Y_MAX_AGENT * 0.2)     # smallest y-coordinate of lower pipe opening
-# Y_MAX_LPIPE  = int(Y_MAX_AGENT * 0.8)     # largest y-coordinate of lower pipe opening
-PIPEGAPSIZE  = BASEY * (1 - PERCENT_TOGETHER/200)
-Y_MAX_LPIPE = BASEY
-Y_MIN_LPIPE = 0
-
-X_MAX_PIPE   = SCREENWIDTH - X_POS_AGENT
-
-# (Discretized) State Attributes
+# States
 NUM_Y_STATES = 10                   # encodes height of player (this should be odd for keeping in center)
 NUM_V_STATES = 10                   # encodes player velocity
 NUM_DX_STATES = 1                   # encodes distance from pipe to player
 NUM_PIPE_STATES = 1                 # encodes center position between pipes
-NUM_STATES = NUM_Y_STATES * NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES
+NUM_ACTIONS = 2
 
-
-# Training Hyperparameters
-T_BETWEEN_STATES = .1
-DISCOUNT = 0.2
-STEP_SIZE = 0.3
-N_STEPS = 5
-
-# Checkpointing and debugging
-CHECKPOINT_DT   = 5 * 60     # every 5 minutes
-READ_CACHE = False
-RESET_EPSILON_GREEDY = False
-EPSILON_START = 0.05
-STATES_BETWEEN_LOG = 1
-LOG = True
-
-EPSILON = (np.ones(NUM_STATES) * EPSILON_START).tolist()
-
+# Actions
 FLAP = True
 NO_FLAP = False
+
+# Values
+LOAD_CACHE = False
+VALUE_FLAP = torch.zeros(
+    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES)
+)
+VALUE_NO_FLAP = torch.ones(
+    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES)
+)
+
+VALUES = torch.ones(
+    size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
+)
+
+
+
+# Hyperparameters
+DISCOUNT            = 0.9
+LEARNING_RATE       = 0.2
+STEP_SIZE           = 0.3
+
+# Training Algorithm
+USE_N_STEP_SARSA    = True      # enable value iteration using n-step SARSA 
+N_STEPS             = 5         # Q(S,A) <- Q(S,A) + LEARNING_RATE*(R1+R2+...+RN+DISCOUNT*Q(S',A')-Q(S,A))
+USE_TD_LAMBDA       = False
+LAMBDA              = 0.6
+ELIGIBILITY_TRACE = torch.zeros(
+    size = (NUM_DX_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
+)
+
+
 # Learns on policy
 class Agent:
     def __init__(self, FPS):
         self.FPS = FPS
-        self.number_frames_between_actions = int(FPS * T_BETWEEN_STATES)        # used to discretize game
+        self.number_frames_between_actions = int(FPS * meta.T_BETWEEN_STATES)        # used to discretize game
         self.frame_count = 0
         self.breakpoint_count = 0
         self.last_backup = time.time()
-        
-        self.episode = [] # (eps num, score)       # used for gathering data
-        self.prev_state: List[int] = []
-        self.prev_reward: List[float] = []
-        self.prev_action: List[int] = []
-        self.q_state_action_epsilon = []
-        if READ_CACHE:
-            self.read_cache()
-        if self.q_state_action_epsilon == []:
-            self.make_vectors()
+        self.episode = [] # (eps num, score)
+        self.prev_SAR = (0, 0, 0)
         print("Created agent")
     
                                     
-    def move(self, y_pos, y_vel, lpipes, upipes, score):        
-        self.frame_count = (self.frame_count + 1) % self.number_frames_between_actions        
+    def move(self, y_pos, y_vel, x_pipe, y_pipe, score):        
         next_move = NO_FLAP
+        self.frame_count += 1 
+        self.frame_count %= self.number_frames_between_actions        
         
         if self.frame_count == 0:
-            print("action")
             # remove past pipes
-            if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
-                    lpipes.pop()
-
             self.score = score       
-            state = self.compute_state(y_pos=y_pos, y_vel=y_vel, lpipe_x=lpipes[0]['x'], lpipe_y=lpipes[0]['y'], upipe_y=upipes[0]['y'] + PIPEHEIGHT, as_index=True)
-            reward = self.compute_reward(y_pos=y_pos, lpipe_y=lpipes[0]['y'], upipe_y=upipes[0]['y'] + PIPEHEIGHT)
-            next_move = self.compute_action(q_noflap=self.q_state_action_epsilon[state[0]][0], q_flap=self.q_state_action_epsilon[state[0]][1], epsilon=self.q_state_action_epsilon[state[0]][2])
+            state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
+            reward = self.compute_reward(y_pos, y_pipe)
+            next_move = self.compute_action(state)
+            
+            if meta.LOG:
+                self.breakpoint_count = (self.breakpoint_count + 1) % meta.STATES_BETWEEN_LOG
+                log(state=state, reward=reward, next_move=next_move) if self.breakpoint_count == 0 else None
+                    
 
-            if LOG:
-                self.log(state=state, reward=reward, next_move=next_move)
+            # self.sarsa()
+            state_prev = self.prev_SAR[0]
+            action_prev = self.prev_SAR[1]
+            self.sarsa_lambda(prev_state=state_prev, prev_action=action_prev, reward_now=reward, state_now=state, action_now=next_move)
+            self.prev_SAR = (state, next_move, reward)
 
-            self.sarsa()
+
+
 
         no_flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
         flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
         return flap if next_move else no_flap
-    
-    
-    def sarsa(self) -> bool:
+        
+    def compute_state(self, y_pos, y_vel, x_pipe, y_pipe):
+        try:
+            Y_POS = map_bin(
+                x=y_pos,
+                minimum=meta.Y_MIN_AGENT-50,
+                maximum=meta.Y_MAX_AGENT,
+                n_bins=NUM_Y_STATES,
+                enforce_bounds=True
+            )
+
+            Y_VEL = map_bin(
+                x=y_vel,
+                minimum=meta.Y_MIN_VELOCITY,
+                maximum=meta.Y_MAX_VELOCITY,
+                n_bins=NUM_V_STATES
+            )
+
+            DX = map_bin(
+                x=x_pipe,
+                minimum=meta.X_POS_AGENT,
+                maximum=meta.X_MAX_PIPE,
+                n_bins=NUM_DX_STATES,
+                enforce_bounds=False
+            )
+
+            C_PIPE = map_bin(
+                x= y_pipe,
+                minimum=meta.Y_MIN_LPIPE - meta.PIPEGAPSIZE/2 - 1,
+                maximum=meta.Y_MAX_LPIPE - meta.PIPEGAPSIZE/2 + 1,
+                n_bins=NUM_PIPE_STATES)
+
+        except ValueError as e:
+            print(e.with_traceback())
+            raise ValueError
+
+        return (Y_POS, Y_VEL, DX, C_PIPE)
+
+    def compute_reward(self, y_pos, y_pipe):
+        #return 1
+        from math import sqrt
+        dx = y_pipe - y_pos
+        reward = -sqrt(abs(dx)) ** 3 / meta.BASEY + 10
+        return reward
+
+    def compute_action(self, state):
+        q_no_flap = VALUE_NO_FLAP[state[0]][state[1]][state[2]][state[3]]
+        q_flap = VALUE_FLAP[state[0]][state[1]][state[2]][state[3]]
+        action = epsilon_greedy(q_no_flap, q_flap, 0)
+        return action
+
+    def sarsa(self):
         if len(self.prev_state) > N_STEPS:
             state_tn = self.prev_state.pop(0)
             action_tn = int(self.prev_action.pop(0))
@@ -113,142 +153,43 @@ class Agent:
 
             Q1 = Q1 + STEP_SIZE * (G_tn + (DISCOUNT**N_STEPS)*QN - Q1)
             self.q_state_action_epsilon[state_tn][action_tn] = Q1
-        
 
-    def compute_state(self, y_pos, y_vel, lpipe_x, lpipe_y, upipe_y, as_index=False):
-        try:
-            Y_POS = map_bin(
-                x=y_pos,
-                minimum=Y_MIN_AGENT-50,
-                maximum=Y_MAX_AGENT,
-                n_bins=NUM_Y_STATES,
-                enforce_bounds=True
-            )
+    def sarsa_lambda(prev_state, prev_action, reward_now, state_now, action_now):
+        Q_prev = (VALUE_NO_FLAP if prev_action == NO_FLAP else VALUE_FLAP)[prev_state]
+        Q_now = (VALUE_NO_FLAP if action_now == NO_FLAP else VALUE_FLAP)[state_now]
 
-            Y_VEL = map_bin(
-                x=y_vel,
-                minimum=Y_MIN_VELOCITY,
-                maximum=Y_MAX_VELOCITY,
-                n_bins=NUM_V_STATES
-            )
+        delta = reward_now + DISCOUNT * Q_now - Q_prev
+        ELIGIBILITY_TRACE[prev_state, int(prev_action)] += 1
 
-            DX = map_bin(
-                x=lpipe_x,
-                minimum=X_POS_AGENT,
-                maximum=X_MAX_PIPE,
-                n_bins=NUM_DX_STATES,
-                enforce_bounds=False
-            )
-
-            C_PIPE = map_bin(
-                x= (upipe_y + lpipe_y)/2,
-                minimum=Y_MIN_LPIPE - PIPEGAPSIZE/2 - 1,
-                maximum=Y_MAX_LPIPE - PIPEGAPSIZE/2 + 1,
-                n_bins=NUM_PIPE_STATES)
-            
-
-        except ValueError as e:
-            print(e.with_traceback())
-            raise ValueError
-        index = 0
-        index += C_PIPE
-        index += DX * (NUM_PIPE_STATES)
-        index += Y_VEL * (NUM_DX_STATES * NUM_PIPE_STATES)
-        index += Y_POS * (NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES)
-        self.prev_state.append(index)
-        return index, (Y_POS, Y_VEL, DX, C_PIPE)
-
-    def compute_reward(self, y_pos, lpipe_y, upipe_y):
-        #return 1
-        from math import sqrt
-        dx = (lpipe_y + upipe_y) / 2 - y_pos
-        reward = -sqrt(abs(dx)) ** 3 / BASEY + 10
-        self.prev_reward.append(reward)
-        return reward
-
-    def compute_action(self, q_noflap, q_flap, epsilon):
-        action = epsilon_greedy(q_noflap, q_flap, epsilon)
-        self.prev_action.append(action)
-        return action
-
-
-    def save(self):
-        from datetime import datetime
-        today = datetime.now()
-        d1 = today.strftime("%m-%d-%Y %H.%M.%S")
-        with open(f"tdn_full/flappy_sarsa-{d1}", 'wb') as f:
-            np.save(f, self.q_state_action_epsilon, allow_pickle=True)
-            np.save(f, self.episode, allow_pickle=True)
-            np.save(f, self.hyperparameters, allow_pickle=True)
-        print(self.q_state_action_epsilon)
-        print(self.episode)
+        for y in range(NUM_Y_STATES):
+            for v in range(NUM_V_STATES):
+                for x in range(NUM_DX_STATES):
+                    for p in range(NUM_PIPE_STATES):
+                        VALUE_NO_FLAP[y,v,x,p] += LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,0] * delta
+                        VALUE_FLAP[y,v,x,p] += LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,1] * delta
+                        ELIGIBILITY_TRACE[y,v,x,p] *= LAMBDA * LEARNING_RATE
 
     def gameover(self, score):
+        now = time.time_ns() / (10 ** 9)
         print(f'GAMEOVER: score = {score}')
         self.episode.append(score)
         print(f'Number Episodes = {len(self.episode)}')
-        now = time.time_ns() / (10 ** 9)
-        if len(self.episode) > 100:
-            self.save()
-            exit(0)
-        self.prev_action = []
-        self.prev_reward = []
-        self.prev_state = []
-        if now - self.last_backup > CHECKPOINT_DT:
+        # backup values for over many training episodes
+        if now - self.last_backup > meta.CHECKPOINT_DT:
             self.last_backup = now
-            self.save()
+            save(self)
+       
+        self.prev_SAR = []
 
-    def log(self, state, reward, next_move) -> None:
-        self.breakpoint_count = (self.breakpoint_count + 1) % STATES_BETWEEN_LOG
-        if self.breakpoint_count == 0:
-            print(f'Y_POS, Y_VEL, DX, C_PIPE = {state[1]} ({state[0]})', end=" ")
-            print(f'Reward = {reward}')
-            print(self.q_state_action_epsilon[state[0]])
-            print(next_move)
-            print()
-
-    def make_vectors(self):
-        # random
-        self.hyperparameters = [
-            DISCOUNT, STEP_SIZE, N_STEPS, NUM_Y_STATES, NUM_V_STATES,
-            NUM_DX_STATES, NUM_PIPE_STATES, NUM_STATES, EPSILON_START
-        ]
-        self.q_state_action_epsilon = np.insert(
-            arr=np.random.normal(loc=10, scale=1, size=(NUM_STATES,2)),
-            obj=2,
-            values=np.ones(NUM_STATES) * EPSILON_START,  # epsilon
-            axis=1).tolist()
-
-        """for j in range(NUM_V_STATES):
-            for k in range(NUM_DX_STATES):
-                for g in range(NUM_PIPE_STATES):
-                    for i in range(int(NUM_Y_STATES * 0.7)):
-                        index = 0
-                        index += g
-                        index += k * (NUM_PIPE_STATES)
-                        index += j * (NUM_DX_STATES * NUM_PIPE_STATES)
-                        index += i * (NUM_V_STATES * NUM_DX_STATES * NUM_PIPE_STATES)
-                        self.q_state_action_epsilon[index][1] = -10"""
-
-    def read_cache(self):
-        try:
-            from os import listdir
-            names = listdir("tdn_full")  # read most recent list
-            name = names[len(names) - 1]
-            with open(f"tdn_full/{name}", 'rb') as f:
-                self.q_state_action_epsilon = np.load(f, allow_pickle=True).tolist()
-                self.episode = np.load(f, allow_pickle=True).tolist()
-                self.hyperparameters = np.load(f, allow_pickle=True).tolist()
-
-            if RESET_EPSILON_GREEDY:
-                self.q_state_action_epsilon[:, 2] = np.ones(NUM_STATES) * EPSILON_START
-
-            print(self.q_state_action_epsilon)
-            print(self.episode)
-            print(self.hyperparameters)
-            return
-        except:
-            pass
+def log(state, reward, next_move) -> None:
+    print(f'State = {state}')
+    print(f'Reward = {reward}')
+    q_no_flap = VALUE_NO_FLAP[state]
+    q_flap = VALUE_FLAP[state]
+    print(f'V(NO_FLAP): {q_no_flap}')
+    print(f'V(FLAP): {q_flap}')
+    print("Flap" if next_move else "No Flap")
+    print()
 
 def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
             f=lambda x: x, one_indexed=False, enforce_bounds=True):
@@ -279,7 +220,6 @@ def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
     else:
         return _hash
 
-
 def epsilon_greedy(q_noflap, q_flap, epsilon):    
     # Sanity check
     if epsilon < 0 or 1 < epsilon:
@@ -296,6 +236,34 @@ def epsilon_greedy(q_noflap, q_flap, epsilon):
     else:
         return greedy
 
+# Determine the save directory
+DIR = ""
+if USE_N_STEP_SARSA:
+    DIR = 'sarsa'
+elif USE_TD_LAMBDA:
+    DIR = 'td-lambda'
 
+def save():
+    import os
+    from datetime import datetime
+    global VALUE_FLAP
+    global VALUE_NO_FLAP
 
+    # make file
+    datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")    
+    if dir not in os.getcwd():
+        os.mkdir(dir)
+    file_name = f"{dir}/weights-{datetime}"
 
+    # save to file
+    d = {'NO_FLAP': VALUE_NO_FLAP, 'FLAP': VALUE_FLAP}
+    torch.save(d, file_name)
+
+if LOAD_CACHE:
+    from os import listdir
+    fn = listdir(DIR)
+    if fn != []:    
+        last = fn.pop()
+        d = torch.load(last)
+        VALUE_NO_FLAP = d['NO_FLAP']
+        VALUE_FLAP = d['FLAP']

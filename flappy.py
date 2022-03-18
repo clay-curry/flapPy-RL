@@ -4,24 +4,17 @@ from re import U
 import sys
 import pygame
 from pygame.locals import *
-from rl.agent import Agent
+from meta import *
 
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 10
+SPEEDUP_FACTOR = 1
 from rl.agent import Agent
 FPS = 30 * SPEEDUP_FACTOR
 agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
-
-SCREENWIDTH  = 288
-SCREENHEIGHT = 512
-PIPEGAPSIZE  = 175 # gap between upper and lower part of pipe
-BASEY        = SCREENHEIGHT * 0.79
 # image, sound and hitmask  dicts
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
-
-
 
 # list of all possible players (tuple of 3 positions of flap)
 PLAYERS_LIST = (
@@ -343,10 +336,21 @@ def mainGame(movementInfo):
 
         ############################# agent plays here
         if AGENTMODE:
+            lpipes=lowerPipes.copy()
+            upipes=upperPipes.copy()
+            
+            if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
+                    lpipes.pop(0)
+                    upipes.pop(0)
+            x = upipes[0]['x']
+            y = (lpipes[0]['y'] + (upipes[0]['y']+PIPEHEIGHT))/2
+            pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
+
             playermove = agent.move(y_pos=playery,y_vel=playerVelY,
-                                    lpipes=lowerPipes.copy(), upipes=upperPipes.copy(),
+                                    x_pipe = x, y_pipe = y,
                                     score=score)
             pygame.event.post(playermove)
+            
         ############################# return to gameplay
 
         pygame.display.update()
@@ -447,7 +451,7 @@ def getRandomPipe():
     ]
 
 
-def ffgetRandomPipe():
+def oldgetRandomPipe():
     """returns a randomly generated pipe"""
     # y of gap between upper and lower pipe
     gapY = random.randrange(0, int(BASEY * 0.6 - PIPEGAPSIZE))
