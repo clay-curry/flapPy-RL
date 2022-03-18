@@ -77,9 +77,7 @@ class Agent:
                     
 
             # self.sarsa()
-            state_prev = self.prev_SAR[0]
-            action_prev = self.prev_SAR[1]
-            self.sarsa_lambda(prev_state=state_prev, prev_action=action_prev, reward_now=reward, state_now=state, action_now=next_move)
+            self.sarsa_lambda(reward_now=reward, state_now=state, action_now=next_move)
             self.prev_SAR = (state, next_move, reward)
 
 
@@ -154,7 +152,10 @@ class Agent:
             Q1 = Q1 + STEP_SIZE * (G_tn + (DISCOUNT**N_STEPS)*QN - Q1)
             self.q_state_action_epsilon[state_tn][action_tn] = Q1
 
-    def sarsa_lambda(prev_state, prev_action, reward_now, state_now, action_now):
+    def sarsa_lambda(self, reward_now, state_now, action_now):
+        prev_state = self.prev_SAR[0]
+        prev_action = self.prev_SAR[1]
+        
         Q_prev = (VALUE_NO_FLAP if prev_action == NO_FLAP else VALUE_FLAP)[prev_state]
         Q_now = (VALUE_NO_FLAP if action_now == NO_FLAP else VALUE_FLAP)[state_now]
 
@@ -165,8 +166,10 @@ class Agent:
             for v in range(NUM_V_STATES):
                 for x in range(NUM_DX_STATES):
                     for p in range(NUM_PIPE_STATES):
-                        VALUE_NO_FLAP[y,v,x,p] += LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,0] * delta
-                        VALUE_FLAP[y,v,x,p] += LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,1] * delta
+                        UPDATE = LEARNING_RATE * ELIGIBILITY_TRACE[y][v][x][p][0] * delta
+                        VALUE_NO_FLAP[y,v,x,p] += UPDATE
+                        UPDATE = LEARNING_RATE * ELIGIBILITY_TRACE[y,v,x,p,1] * delta
+                        VALUE_FLAP[y,v,x,p] += UPDATE
                         ELIGIBILITY_TRACE[y,v,x,p] *= LAMBDA * LEARNING_RATE
 
     def gameover(self, score):
