@@ -8,8 +8,8 @@ from meta import *
 
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 10
-from rl.sarsa_lambda import Agent
+SPEEDUP_FACTOR = 20
+from rl.n_sarsa import Agent
 FPS = 30 * SPEEDUP_FACTOR
 agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
@@ -61,7 +61,7 @@ def main():
     global SCREEN, FPSCLOCK
     pygame.init()
     FPSCLOCK = pygame.time.Clock()
-    SCREEN = pygame.display.set_mode((SCREENWIDTH, SCREENHEIGHT))
+    SCREEN = pygame.display.set_mode((SCREENWIDTH, SCREENHEIGHT), display=1)
     pygame.display.set_caption('Flappy Bird')
 
     # numbers sprites for score display
@@ -257,8 +257,8 @@ def mainGame(movementInfo):
                                upperPipes, lowerPipes)
         if crashTest[0]:
             return {
-                'y': playery,
-                'groundCrash': crashTest[1],
+                'y': BASEY,
+                'groundCrash': True,
                 'basex': basex,
                 'upperPipes': upperPipes,
                 'lowerPipes': lowerPipes,
@@ -336,18 +336,17 @@ def mainGame(movementInfo):
 
         ############################# agent plays here
         if AGENTMODE:
-            upipes=upperPipes.copy()
-            if upipes[0]['x'] < X_POS_AGENT and len(upipes) > 1:
-                    upipes.pop(0)
-            x = upipes[0]['x']
-            y = (upipes[0]['y']+PIPEHEIGHT+PIPEGAPSIZE/3)
+            lpipes=lowerPipes.copy()
+            if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
+                    lpipes.pop(0)
+            x = lpipes[0]['x']
+            y = lpipes[0]['y']
             pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
 
             playermove = agent.move(y_pos=playery,y_vel=playerVelY,
-                                    x_pipe = x, y_pipe = y,
-                                    score=score)
+                                    x_pipe = x, y_pipe = y, score=score)
             pygame.event.post(playermove)
-            if score > 1000:
+            if score > MAX_POINTS_PER_EPISODE:
                 return {
                 'y': playery,
                 'groundCrash': crashTest[1],
@@ -449,15 +448,11 @@ def getRandomPipe():
     pipeHeight = IMAGES['pipe'][0].get_height()
     pipeX = SCREENWIDTH + 10
     # Hi, Clay here
-    
-    gapY = random.randrange(0, int(BASEY * 0.6 - PIPEGAPSIZE))
-    gapY += int(BASEY * 0.2)
-    pipeHeight = IMAGES['pipe'][0].get_height()
-    pipeX = SCREENWIDTH + 10
+    Y_LIPE = random.randrange(int(Y_MIN_LPIPE), int(Y_MAX_LPIPE))
 
     return [
-        {'x': pipeX, 'y': gapY - pipeHeight},  # upper pipe
-        {'x': pipeX, 'y': gapY + PIPEGAPSIZE}, # lower pipe
+        {'x': pipeX, 'y': Y_LIPE - PIPEGAPSIZE - pipeHeight},  # upper pipe
+        {'x': pipeX, 'y': Y_LIPE}, # lower pipe
     ]
 
 
