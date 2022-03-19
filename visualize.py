@@ -1,6 +1,6 @@
 import numpy as np
 import os
-
+import torch
 import matplotlib.pyplot as plt
 episodes = []
 
@@ -18,11 +18,11 @@ for file in file_names:
 
 x = [x+1 for x in range(31)]
 print(len(episodes[0]))
-plt.scatter(x, episodes[0], color='r', label='Trial 1 (500 episodes)')
-plt.scatter(x, episodes[1], color='b', label='Trial 2 (500 episodes)')
-plt.scatter(x, episodes[2], color='g', label='Trial 3 (500 episodes)')
-plt.scatter(x, episodes[3], color='y', label='Trial 4 (500 episodes)')
-plt.scatter(x, episodes[4], color='m', label='Trial 5 (500 episodes)')
+plt.scatter(x, episodes[0], color='r', label='Trial 1 (1000 episodes)')
+plt.scatter(x, episodes[1], color='b', label='Trial 2 (1000 episodes)')
+plt.scatter(x, episodes[2], color='g', label='Trial 3 (1000 episodes)')
+plt.scatter(x, episodes[3], color='y', label='Trial 4 (1000 episodes)')
+plt.scatter(x, episodes[4], color='m', label='Trial 5 (1000 episodes)')
 plt.ylabel("Score (stopped at 1000)")
 plt.xlabel("Episodes")
 plt.title(r"$n$-step Sarsa ($n$=5, $\gamma$=0.2, $a$=0.3)")

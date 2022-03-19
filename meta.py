@@ -17,7 +17,7 @@ Y_MIN_VELOCITY = -9
 # PIPE SETTINGS
 PERCENT_TOGETHER = 5
 PIPEHEIGHT = 320
-PIPEGAPSIZE  = 100
+PIPEGAPSIZE  = 200
 # Y_MIN_LPIPE  = int(Y_MAX_AGENT * 0.2)     # smallest y-coordinate of lower pipe opening
 # Y_MAX_LPIPE  = int(Y_MAX_AGENT * 0.8)     # largest y-coordinate of lower pipe opening
 # PIPEGAPSIZE  = BASEY * (1 - PERCENT_TOGETHER/200)
@@ -30,9 +30,13 @@ X_MAX_PIPE   = SCREENWIDTH - X_POS_AGENT
 # Checkpointing and debugging
 RESET_EPSILON_GREEDY = False
 STATES_BETWEEN_LOG = 1
-LOG = False
+LOG = True
+
+EPISODES_PER_SEQUENCE = 1000
+SEQUENCE_PER_PARAMETER = 5
 
 
 #self.VALUES
-LOAD = True
-SAVE = True
+LOAD = False
+SAVE = False
+LOAD_FILE = 'init'

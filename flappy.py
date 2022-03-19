@@ -9,7 +9,7 @@ from meta import *
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
 SPEEDUP_FACTOR = 10
-from agent import Agent
+from rl.sarsa_lambda import Agent
 FPS = 30 * SPEEDUP_FACTOR
 agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
@@ -340,14 +340,25 @@ def mainGame(movementInfo):
             if upipes[0]['x'] < X_POS_AGENT and len(upipes) > 1:
                     upipes.pop(0)
             x = upipes[0]['x']
-            y = (upipes[0]['y']+PIPEHEIGHT)
+            y = (upipes[0]['y']+PIPEHEIGHT+PIPEGAPSIZE/3)
             pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
 
             playermove = agent.move(y_pos=playery,y_vel=playerVelY,
                                     x_pipe = x, y_pipe = y,
                                     score=score)
             pygame.event.post(playermove)
-            
+            if score > 1000:
+                return {
+                'y': playery,
+                'groundCrash': crashTest[1],
+                'basex': basex,
+                'upperPipes': upperPipes,
+                'lowerPipes': lowerPipes,
+                'score': score,
+                'playerVelY': playerVelY,
+                'playerRot': playerRot
+            }
+
         ############################# return to gameplay
 
         pygame.display.update()

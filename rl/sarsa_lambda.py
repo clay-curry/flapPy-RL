@@ -1,4 +1,5 @@
 from math import exp, pi
+from random import random
 import numpy as np
 from typing import List
 import pygame
@@ -8,33 +9,33 @@ import torch
 print(torch.cuda.is_available())
 
 # States
-NUM_Y_STATES = 10                   # encodes height of player (this should be odd for keeping in center)
+NUM_Y_STATES = 20                   # encodes height of player (this should be odd for keeping in center)
 NUM_V_STATES = 10                   # encodes player velocity
-NUM_DX_STATES = 10                   # encodes distance from pipe to player
+NUM_DX_STATES = 20                   # encodes distance from pipe to player
 NUM_PIPE_STATES = 8                 # encodes center position between pipes
 NUM_ACTIONS = 2
 
 # Actions
-FLAP = True
-NO_FLAP = False
+NO_FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
+FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
 
-
-# Hyperparameters
-DISCOUNT            = 0.9
-LEARNING_RATE       = 0.2
-STEP_SIZE           = 0.3
 
 # Training Algorithm
-USE_N_STEP_SARSA    = True      # enable value iteration using n-step SARSA 
-N_STEPS             = 5         # Q(S,A) <- Q(S,A) + LEARNING_RATE*(R1+R2+...+RN+DISCOUNT*Q(S',A')-Q(S,A))
-USE_TD_LAMBDA       = False
-LAMBDA              = 0.8
+USE_SARSA_LAMBDA    = True
+
+# Tests
+J = 4
+LAMBDA              = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+DISCOUNT            = [0.9, 0.9, 0.9, 0.9, 0.9]
+STEP_SIZE           = [0.5, 0.5, 0.5, 0.5, 0.5]
+
 
 VALUES = torch.ones(
     size = (NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)
  )
 ELIGIBILITY_TRACES = torch.zeros_like(VALUES)
-
+if meta.LOAD:
+    VALUES = torch.load(f'rl/sarsa_lamb/{meta.LOAD_FILE}')
 
 # Learns on policy
 class Agent:
@@ -42,9 +43,11 @@ class Agent:
         self.FPS = FPS
         self.number_frames_between_actions = int(FPS * meta.T_BETWEEN_STATES)        # used to discretize game
         self.frame_count = 0
+        self.sequences = 0
         self.breakpoint_count = 0
         self.last_backup = time.time()
         self.episode = [] # (eps num, score)
+        
         self.prev_SAR = None
         
         self.VALUES = VALUES
@@ -52,27 +55,26 @@ class Agent:
         print("Created agent")
                                       
     def move(self, y_pos, y_vel, x_pipe, y_pipe, score):        
-        next_move = NO_FLAP
+        move = NO_FLAP
         self.frame_count += 1 
         self.frame_count %= self.number_frames_between_actions        
         
         if self.frame_count == 0:
             # remove past pipes
-            self.score = score       
+            self.score = score      
+            # compute current state, reward action
             state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
             reward = self.compute_reward(y_pos, y_pipe)
-            next_move = self.compute_action(state)
-            
+            action = self.compute_action(state, 0.05)
+            self.sarsa_lambda(reward_now=reward, state_now=state, action_now=action)
             if meta.LOG:
                 self.breakpoint_count = (self.breakpoint_count + 1) % meta.STATES_BETWEEN_LOG
-                self.log(state=state, reward=reward, next_move=next_move) if self.breakpoint_count == 0 else None
-                    
-            # self.sarsa()
-            self.sarsa_lambda(reward_now=reward, state_now=state, action_now=next_move)
+                self.log_flappy(state=state, reward=reward, next_move=action) if self.breakpoint_count == 0 else None
 
-        no_flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
-        flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
-        return flap if next_move else no_flap
+            if action == 1:
+                move = FLAP
+
+        return move
         
     def compute_state(self, y_pos, y_vel, x_pipe, y_pipe):
         try:
@@ -117,28 +119,22 @@ class Agent:
         sigma = 60
         dx = y_pipe - y_pos
         reward = exp(- (dx**2) / (2 * sigma**2) )
-        return reward
+        return 10
 
-    def compute_action(self, state):
-        q_no_flap = self.VALUES[state][0]
-        q_flap = self.VALUES[state][1]
-        action = epsilon_greedy(q_no_flap, q_flap, 0.05)
-        return action
+    def compute_action(self, state, epsilon):
+        "returns the esilon-greedy action over the possible"
+        # Sanity check
+        if epsilon < 0 or 1 < epsilon:
+            raise ValueError(f"epsilon = {epsilon} which is not in [0,1]")
 
-    def sarsa(self):
-        if len(self.prev_state) > N_STEPS:
-            state_tn = self.prev_state.pop(0)
-            action_tn = int(self.prev_action.pop(0))
-            self.prev_reward.pop(0)
-            Q1 = self.q_state_action_epsilon[state_tn][action_tn]
-            
-            # Compute the discounted sum of n rewards
-            G_terms = [self.prev_reward[k] * DISCOUNT**k for k in range(N_STEPS)]
-            G_tn = sum(G_terms)
-            QN = max(self.q_state_action_epsilon[self.prev_state[N_STEPS-1]][0:2])
+        if np.random.uniform(0, 1) >= epsilon: # true (1-epsilon)% of the time
+            greedy = torch.argmax(VALUES[state])
+            return int(greedy)
+        else:
+            random = torch.randint(low=0, high=NUM_ACTIONS, size=(1,))
+            return int(random)
 
-            Q1 = Q1 + STEP_SIZE * (G_tn + (DISCOUNT**N_STEPS)*QN - Q1)
-            self.q_state_action_epsilon[state_tn][action_tn] = Q1
+        
 
     def sarsa_lambda(self, reward_now, state_now, action_now):
         if self.prev_SAR is not None and len(self.prev_SAR) > 0:
@@ -153,9 +149,9 @@ class Agent:
             
             self.ELIGIBILITY_TRACES[s0][int(a0)] += 1
 
-            UPDATE = LEARNING_RATE * (r1 + DISCOUNT * Q_now - Q_prev) * self.ELIGIBILITY_TRACES 
+            UPDATE = STEP_SIZE[J] * (r1 + DISCOUNT[J] * Q_now - Q_prev) * self.ELIGIBILITY_TRACES 
             self.VALUES =self.VALUES + UPDATE
-            self.ELIGIBILITY_TRACES = LAMBDA * LEARNING_RATE * self.ELIGIBILITY_TRACES
+            self.ELIGIBILITY_TRACES = LAMBDA[J] * STEP_SIZE[J] * self.ELIGIBILITY_TRACES
         
         self.prev_SAR = (state_now, action_now, reward_now)
 
@@ -164,36 +160,46 @@ class Agent:
         print(f'GAMEOVER: score = {score}')
         self.episode.append(score)
         print(f'Number Episodes = {len(self.episode)}')
-        # backupself.VALUES for over many training episodes
-        if now - self.last_backup > meta.CHECKPOINT_DT:
-            self.last_backup = now
+        
+        if len(self.episode) >= meta.EPISODES_PER_SEQUENCE:
             self.save()
-       
+            from datetime import datetime
+            # make file
+            datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S") 
+            if USE_SARSA_LAMBDA:
+                torch.save(self.episode, f"sarsa_lamb/results/sarsa-lamb-{LAMBDA[J]}-disc-{DISCOUNT[J]}-rate-{STEP_SIZE[J]}-{datetime}")
+
+            self.VALUES = torch.load(f'{DIR}/init')
+            self.episode = []
+            self.sequences += 1
+            if self.sequences >= meta.SEQUENCE_PER_PARAMETER:
+                exit(0)
+            
         self.prev_SAR = []
 
     def save(self):
-        import os
+        if meta.SAVE == False:
+            return
         from datetime import datetime
-        # make file
         datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")    
-        if DIR not in os.listdir():
-            os.mkdir(DIR)
-        file_name = f"{DIR}/weights-{datetime}"
+        
+        file_name = f"rl/sarsa_lamb/weights-{datetime}"
 
         # save to file
         d = self.VALUES
         torch.save(d, file_name)
 
-    def log(self, state, reward, next_move) -> None:
+    def log_flappy(self, state, reward, next_move) -> None:
         print(f'State = {state}')
         print(f'Reward = {reward}')
+        print(f'Action = ' + ("Flap" if next_move == 1 else "No Flap"))
         q_no_flap = self.VALUES[state][0]
         q_flap = self.VALUES[state][1]
         print(f'V(NO_FLAP): {q_no_flap}')
         print(f'V(FLAP): {q_flap}')
         print(f'E(NO_FLAP): {self.ELIGIBILITY_TRACES[state][0]}')
         print(f'E(FLAP): {self.ELIGIBILITY_TRACES[state][1]}')
-        print("Flap" if next_move else "No Flap")
+        
         print()
 
 def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
@@ -224,34 +230,3 @@ def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
         return _hash + 1
     else:
         return _hash
-
-def epsilon_greedy(q_noflap, q_flap, epsilon):    
-    # Sanity check
-    if epsilon < 0 or 1 < epsilon:
-        raise ValueError(f"epsilon = {epsilon} which is not in [0,1]")
-
-    # Determine greedy state
-    greedy = NO_FLAP
-    if q_noflap < q_flap:
-        greedy = FLAP
-
-    # Return greedy state with p = 1 - epsilon
-    if np.random.uniform(0, 1) < epsilon:
-        return not greedy
-    else:
-        return greedy
-
-# Determine the save directory
-DIR = ""
-if USE_N_STEP_SARSA:
-    DIR = 'sarsa'
-elif USE_TD_LAMBDA:
-    DIR = 'td-lambda'
-
-if meta.LOAD:
-    from os import listdir
-    fn = listdir(DIR)
-    if fn != []:    
-        last = fn.pop()
-        VALUES = torch.load(f'{DIR}/{last}')
-        
