@@ -2,7 +2,7 @@ import numpy as np
 from typing import List
 import pygame
 import time
-import meta
+import config
 import torch
 import os
 import torch
@@ -47,8 +47,8 @@ NUM_ACTIONS = 2
 
 # Values
 VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)) * 1.5
-if meta.LOAD:
-    VALUES = torch.load(f'rl/sarsa_lamb/{meta.LOAD_FILE}')
+if config.LOAD:
+    VALUES = torch.load(f'rl/sarsa_lamb/{config.LOAD_FILE}')
 
 # Parameters
 J = 0           # index selection for the next run
@@ -77,14 +77,14 @@ class Agent:
     def move(self, y_pos, y_vel, x_pipe, y_pipe,score):        
         move = NO_FLAP
 
-        self.t = (1 + self.t) % int(self.FPS * meta.T_BETWEEN_STATES)        
+        self.t = (1 + self.t) % int(self.FPS * config.T_BETWEEN_STATES)        
         if self.t == 0:
             # compute current state, reward action
             
             state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
             reward = self.compute_reward(y_pos, y_pipe)
             action = self.compute_action(state, self.compute_epsilon(score))
-            if meta.LOG:
+            if config.LOG:
                 self.log_flappy(state=state, reward=reward, next_move=action)
             
             # updates values
@@ -98,31 +98,31 @@ class Agent:
         try:
             Y_POS = map_bin(
                 x=y_pos,
-                minimum=meta.Y_MIN_AGENT-50,
-                maximum=meta.Y_MAX_AGENT,
+                minimum=config.Y_MIN_AGENT-50,
+                maximum=config.Y_MAX_AGENT,
                 n_bins=NUM_Y_STATES,
                 enforce_bounds=True
             )
 
             Y_VEL = map_bin(
                 x=y_vel,
-                minimum=meta.Y_MIN_VELOCITY,
-                maximum=meta.Y_MAX_VELOCITY,
+                minimum=config.Y_MIN_VELOCITY,
+                maximum=config.Y_MAX_VELOCITY,
                 n_bins=NUM_V_STATES
             )
 
             DX = map_bin(
-                x=x_pipe-meta.X_POS_AGENT,
+                x=x_pipe-config.X_POS_AGENT,
                 minimum=0,
-                maximum=meta.X_MAX_PIPE,
+                maximum=config.X_MAX_PIPE,
                 n_bins=NUM_DX_STATES,
                 enforce_bounds=False
             )
 
             C_PIPE = map_bin(
                 x= y_pipe,
-                minimum=meta.Y_MIN_LPIPE - meta.PIPEGAPSIZE/2 - 1,
-                maximum=meta.Y_MAX_LPIPE - meta.PIPEGAPSIZE/2 + 1,
+                minimum=config.Y_MIN_LPIPE - config.PIPEGAPSIZE/2 - 1,
+                maximum=config.Y_MAX_LPIPE - config.PIPEGAPSIZE/2 + 1,
                 n_bins=NUM_PIPE_STATES,
                 enforce_bounds=False)
 
@@ -169,7 +169,7 @@ class Agent:
         self.score_hist.append(score)
         print(f'Number Episodes = {len(self.score_hist)}')
 
-        if len(self.score_hist) >= meta.EPISODES_PER_SEQUENCE:
+        if len(self.score_hist) >= config.EPISODES_PER_SEQUENCE:
             self.save()
             from datetime import datetime
             global SEQUENCE_COUNT
@@ -181,14 +181,14 @@ class Agent:
             self.score_hist = []
             
             SEQUENCE_COUNT += 1
-            if SEQUENCE_COUNT >= meta.SEQUENCE_PER_PARAMETER:
+            if SEQUENCE_COUNT >= config.SEQUENCE_PER_PARAMETER:
                 J += 1
                 if J == len(N):
                     exit(0)
                 
 
     def save(self):
-        if meta.SAVE == False:
+        if config.SAVE == False:
             return
         from datetime import datetime
         datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")    

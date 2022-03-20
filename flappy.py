@@ -4,12 +4,12 @@ from re import U
 import sys
 import pygame
 from pygame.locals import *
-from meta import *
+from config import *
 
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 20
-from rl.n_sarsa import Agent
+SPEEDUP_FACTOR = 15
+from n_sarsa import Agent
 FPS = 30 * SPEEDUP_FACTOR
 agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
@@ -164,11 +164,11 @@ def showWelcomeAnimation():
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
                 agent.save()
-                print('saved q_sarsa')
+                print('saved agent')
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 # make first flap sound and return values for mainGame
-                SOUNDS['wing'].play()
+                # SOUNDS['wing'].play()
                 return {
                     'playery': playery + playerShmVals['val'],
                     'basex': basex,
@@ -243,14 +243,14 @@ def mainGame(movementInfo):
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
                 agent.save()
-                print('saved q_sarsa')
+                print('saved agent')
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 if playery > -2 * IMAGES['player'][0].get_height():
                     
                     playerVelY = playerFlapAcc
                     playerFlapped = True
-                    SOUNDS['wing'].play()
+                    # SOUNDS['wing'].play()
 
         # check for crash here
         crashTest = checkCrash({'x': playerx, 'y': playery, 'index': playerIndex},
@@ -325,7 +325,8 @@ def mainGame(movementInfo):
         # print score so player overlaps the score
         showScore(score)
 
-        # bird circles haha - clay
+        # bird circles
+        # haha - clay
         # Player rotation has a threshold
         visibleRot = playerRot
         # if playerRot > playerRotThr:
@@ -336,28 +337,30 @@ def mainGame(movementInfo):
 
         ############################# agent plays here
         if AGENTMODE:
-            lpipes=lowerPipes.copy()
-            if lpipes[0]['x'] < X_POS_AGENT and len(lpipes) > 1:
-                    lpipes.pop(0)
-            x = lpipes[0]['x']
-            y = lpipes[0]['y']
-            pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
+            try:
+                lpipes=lowerPipes.copy()
+                if lpipes[0]['x'] + pipeWidth < X_POS_AGENT and len(lpipes) > 1:
+                        lpipes.pop(0)
+                x = lpipes[0]['x'] + pipeWidth
+                y = lpipes[0]['y']
+                pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
 
-            playermove = agent.move(y_pos=playery,y_vel=playerVelY,
-                                    x_pipe = x, y_pipe = y, score=score)
-            pygame.event.post(playermove)
-            if score > MAX_POINTS_PER_EPISODE:
-                return {
-                'y': playery,
-                'groundCrash': crashTest[1],
-                'basex': basex,
-                'upperPipes': upperPipes,
-                'lowerPipes': lowerPipes,
-                'score': score,
-                'playerVelY': playerVelY,
-                'playerRot': playerRot
-            }
-
+                playermove = agent.move(y_pos=playery,y_vel=playerVelY,
+                                        x_pipe = x, y_pipe = y, score=score)
+                pygame.event.post(playermove)
+                if score == MAX_POINTS_PER_EPISODE:
+                    return {
+                    'y': playery,
+                    'groundCrash': crashTest[1],
+                    'basex': basex,
+                    'upperPipes': upperPipes,
+                    'lowerPipes': lowerPipes,
+                    'score': score,
+                    'playerVelY': playerVelY,
+                    'playerRot': playerRot
+                }
+            except:
+                pass
         ############################# return to gameplay
 
         pygame.display.update()
@@ -382,9 +385,9 @@ def showGameOverScreen(crashInfo):
     upperPipes, lowerPipes = crashInfo['upperPipes'], crashInfo['lowerPipes']
 
     # play hit and die sounds
-    SOUNDS['hit'].play()
-    if not crashInfo['groundCrash']:
-        SOUNDS['die'].play()
+    #SOUNDS['hit'].play()
+    #if not crashInfo['groundCrash']:
+        #SOUNDS['die'].play()
 
     while True:      
         if AGENTMODE:
@@ -394,7 +397,7 @@ def showGameOverScreen(crashInfo):
             if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
                 pygame.quit()
                 agent.save()
-                print('saved q_sarsa')
+                print('saved agent')
                 sys.exit()
             if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
                 if playery + playerHeight >= BASEY - 1:
