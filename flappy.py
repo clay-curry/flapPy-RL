@@ -359,8 +359,8 @@ def mainGame(movementInfo):
                     'playerVelY': playerVelY,
                     'playerRot': playerRot
                 }
-            except:
-                pass
+            except Exception as e:
+                print(e)
         ############################# return to gameplay
 
         pygame.display.update()

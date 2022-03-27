@@ -1,6 +1,6 @@
 from math import exp, pi
 from operator import index
-from random import random
+from random import random, randrange
 from statistics import median
 from turtle import update
 import numpy as np
@@ -22,27 +22,29 @@ NUM_DX_STATES = 10                   # encodes distance from pipe to player
 NUM_PIPE_STATES = 8                 # encodes center position between pipes
 NUM_ACTIONS = 2
 
-# Values
-VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)) * 5
-VALUES[:,:,:,:,1] /= 1.1 # gives no-flap more value
-
-
-if config.LOAD:
-    VALUES = torch.load(f'rl/sarsa_lamb/{config.LOAD_FILE}')
-
-# Parameters
-J = 4           # index selection for the next run
+# Training Parameters
+J = 4           # overridden by command line arguments; determines which parameter index to use
 N              = [1, 3, 6, 9, 12, 15]
 DISCOUNT       = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
 STEP_SIZE      = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
-SEQUENCE_COUNT = 0
+# Values + Uncertainty
+VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS + 1)) * 5
+VALUES[:,:,:,:,1] /= 1.1    # gives no-flap more value
+VALUES[:,:,:,:,2] = 0.1     # certainty, initialized to 20%, reduced as points are awarded
+
+if config.LOAD:
+    VALUES = torch.load(f'data/weights/{config.LOAD_FILE}')
+
+
 
 # Learns on policy
 class Agent:
     def __init__(self, FPS):
         self.FPS = FPS
-        self.t = 0        # used to discretize game
+        self.t = 0        # used to discretize time
+        self.score = 0
+        self.sequence_count = 0
         self.Q = VALUES
 
         index = J
@@ -69,7 +71,10 @@ class Agent:
             
             state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
             reward = self.compute_reward(y_pos, y_pipe)
-            action = self.compute_action(state, self.compute_epsilon(score))
+            # action = self.compute_action(state, self.compute_epsilon(score))
+            action = self.compute_action(state, self.Q[state][2])
+            self.update_uncertainty(score)
+            
             if config.LOG:
                 self.log_flappy(state=state, reward=reward, next_move=action)
             
@@ -122,24 +127,30 @@ class Agent:
         return 1
         
     def compute_action(self, state, epsilon):
-        "returns the esilon-greedy action over the possible"
+        "returns the esilon-greedy action over the possible actions"
         # Sanity check
         if epsilon < 0 or 1 < epsilon:
             raise ValueError(f"epsilon = {epsilon} which is not in [0,1]")
 
         Q = self.Q[state]
-        greedy_indices = (Q == max(Q)).nonzero(as_tuple=True)[0]
-        random_greedy_index = greedy_indices[torch.randint(len(greedy_indices), (1,))][0]
-        
+        greedy_index = randrange(0, 2)
+        if Q[0] > Q[1]:
+            greedy_index = 0
+        elif Q[0] < Q[1]:
+            greedy_index = 1
+
         if np.random.uniform(0, 1) >= epsilon: # true (1-epsilon)% of the time
-            return int(random_greedy_index)
+            return int(greedy_index)
         else:
-            ungreedy_indices = (Q != max(Q)).nonzero(as_tuple=True)[0]
-            if len(ungreedy_indices) == 0:
-                return int(random_greedy_index)
-            else:
-                random_ungreedy_index = ungreedy_indices[torch.randint(len(ungreedy_indices), (1,))][0]
-                return int(random_ungreedy_index)
+            return 1 - greedy_index
+        
+    def update_uncertainty(self, score):
+        if score > self.score:
+            self.score = score
+            for s,a,r in self.prev_SAR:
+                uncertainty = self.Q[s][2] / 2
+                self.Q[s][2] = uncertainty
+
 
     def compute_epsilon(self, score):
         """determines uncertainty of agent in particular situation"""
@@ -154,26 +165,28 @@ class Agent:
         epsilon = 0.05 * median([abs(update)/50 for update in self.update_hist[-50:]]) / self.max_update
         return epsilon
     
-
     def n_sarsa(self, reward_now, state_now, action_now):
         self.prev_SAR.append((state_now, action_now, reward_now))
         if len(self.prev_SAR) >self.N:
             d = self.DISCOUNT
-            s0, a0, r0 = self.prev_SAR.pop(0)
+            s, a, r = self.prev_SAR.pop(0)
             rewards = [r[2] for r in self.prev_SAR]
             G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
             
-            update_size = float(self.STEP_SIZE * (G - self.Q[s0][a0]))
-            self.Q[s0][a0] += update_size
+            update_size = float(self.STEP_SIZE * (G - self.Q[s][a]))
+            self.Q[s][a] += update_size
             self.update_hist.append(update_size)
 
     def n_gameover(self):
         while len(self.prev_SAR) > 1:
             d = self.DISCOUNT
-            s0, a0, r0 = self.prev_SAR.pop(0)
+            s, a, r = self.prev_SAR.pop(0)
             rewards = [r[2] for r in self.prev_SAR]
             G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
-            self.Q[s0][a0] += self.STEP_SIZE * (G - self.Q[s0][a0])
+            
+            update_size = float(self.STEP_SIZE * (G - self.Q[s][a]))
+            self.Q[s][a] += update_size
+            self.update_hist.append(update_size)
 
     def gameover(self, score):
         now = time.time_ns() / (10 ** 9)
@@ -182,35 +195,34 @@ class Agent:
         self.t=0
         print(f'Number Episodes = {len(self.score_hist)}')
         self.n_gameover()
+        self.score=0
 
         if len(self.score_hist) >= config.EPISODES_PER_SEQUENCE:
             self.save()
             from datetime import datetime
-            global SEQUENCE_COUNT
             # make file
             datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")     
             
             self.Q = VALUES
             self.score_hist = []
             
-            SEQUENCE_COUNT += 1
-            if SEQUENCE_COUNT >= config.SEQUENCE_PER_PARAMETER:
+            self.sequence_count += 1
+            if self.sequence_count >= config.SEQUENCE_PER_PARAMETER:
                 exit(0)
                 
-
     def save(self):
         if config.SAVE == False:
             return
         from datetime import datetime
-        dt = datetime.now().strftime("%m-%d-%Y %H.%M.%S")
+        dt = datetime.now().strftime("%m-%d-%Y-%H.%M.%S")
         saved = False
         while saved == False:
             try:
-                open(f"rl/n_sarsa/scores/n-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.txt", 'x') 
-                with open(f"rl/n_sarsa/scores/n-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.txt", 'w') as f:
+                open(f"data/scores/nsarsa-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.txt", 'x') 
+                with open(f"data/scores/nsarsa-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.txt", 'w') as f:
                     f.write(str(self.score_hist))
 
-                torch.save(self.Q, f"rl/n_sarsa/weights/disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.pt")
+                torch.save(self.Q, f"data/weights/nsarsa-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.pt")
                 saved = True
             except Exception as e:
                 print(e)
