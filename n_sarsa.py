@@ -23,14 +23,14 @@ NUM_PIPE_STATES = 8                 # encodes center position between pipes
 NUM_ACTIONS = 2
 
 # Training Parameters
-J = 4           # overridden by command line arguments; determines which parameter index to use
+J = 5           # overridden by command line arguments; determines which parameter index to use
 N              = [1, 3, 6, 9, 12, 15]
 DISCOUNT       = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
 STEP_SIZE      = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
 # Values + Uncertainty
-VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS + 1)) * 5
-VALUES[:,:,:,:,1] /= 1.1    # gives no-flap more value
+VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS + 1)) * 3
+VALUES[:,:,:,:,1] /= 1.01    # gives no-flap more value
 VALUES[:,:,:,:,2] = 0.1     # certainty, initialized to 20%, reduced as points are awarded
 
 if config.LOAD:
@@ -148,7 +148,7 @@ class Agent:
         if score > self.score:
             self.score = score
             for s,a,r in self.prev_SAR:
-                uncertainty = self.Q[s][2] / 2
+                uncertainty = self.Q[s][2] / ((1 + self.Q[s][2]) ** (1 + score ** 2))
                 self.Q[s][2] = uncertainty
 
 
@@ -168,25 +168,30 @@ class Agent:
     def n_sarsa(self, reward_now, state_now, action_now):
         self.prev_SAR.append((state_now, action_now, reward_now))
         if len(self.prev_SAR) >self.N:
-            d = self.DISCOUNT
-            s, a, r = self.prev_SAR.pop(0)
-            rewards = [r[2] for r in self.prev_SAR]
-            G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
+            s, a, _ = self.prev_SAR.pop(0)
+
+            Gt = [self.prev_SAR[r][2]*(self.DISCOUNT ** r) for r in range(len(self.prev_SAR))]
+            value_now = self.Q[state_now][action_now]
+            expected_update = sum(Gt) + value_now * self.DISCOUNT ** len(self.prev_SAR)
             
-            update_size = float(self.STEP_SIZE * (G - self.Q[s][a]))
+            update_size = float(self.STEP_SIZE * (expected_update - self.Q[s][a]))
             self.Q[s][a] += update_size
+            self.Q[s][2] /= 1.0001
             self.update_hist.append(update_size)
 
     def n_gameover(self):
         while len(self.prev_SAR) > 1:
-            d = self.DISCOUNT
-            s, a, r = self.prev_SAR.pop(0)
-            rewards = [r[2] for r in self.prev_SAR]
-            G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
+            s, a, _ = self.prev_SAR.pop(0)
+
+            Gt = [self.prev_SAR[r][2]*(self.DISCOUNT ** r) for r in range(len(self.prev_SAR))]
+            value_now = 0
+            expected_update = sum(Gt) + value_now * self.DISCOUNT ** len(self.prev_SAR)
             
-            update_size = float(self.STEP_SIZE * (G - self.Q[s][a]))
+            update_size = float(self.STEP_SIZE * (expected_update - self.Q[s][a]))
             self.Q[s][a] += update_size
+            self.Q[s][2] /= 1.01
             self.update_hist.append(update_size)
+            
 
     def gameover(self, score):
         now = time.time_ns() / (10 ** 9)

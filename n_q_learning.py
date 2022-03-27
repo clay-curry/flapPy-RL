@@ -19,19 +19,19 @@ FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
 NUM_Y_STATES = 20                   # encodes height of player (this should be odd for keeping in center)
 NUM_V_STATES = 10                   # encodes player velocity
 NUM_DX_STATES = 10                   # encodes distance from pipe to player
-NUM_DY_STATES = 10                 # encodes center position between pipes
+NUM_PIPE_STATES = 8                 # encodes center position between pipes
 NUM_ACTIONS = 2
 
 # Training Parameters
-J = 6           # overridden by command line arguments; determines which parameter index to use
-N              = [1, 3, 6, 9, 12, 15, 20]
-DISCOUNT       = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
-STEP_SIZE      = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+J = 5           # overridden by command line arguments; determines which parameter index to use
+N              = [1, 3, 6, 9, 12, 15]
+DISCOUNT       = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
+STEP_SIZE      = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
 # Values + Uncertainty
-VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_DY_STATES, NUM_ACTIONS + 1)) * 8
-VALUES[:,:,:,:,1] /= 1.1    # gives no-flap more value
-VALUES[:,:,:,:,2] = 0.2     # certainty, initialized to 10%, reduced as points are awarded
+VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS + 1)) * 3
+VALUES[:,:,:,:,1] /= 1.01    # gives no-flap more value
+VALUES[:,:,:,:,2] = 0.1     # certainty, initialized to 20%, reduced as points are awarded
 
 if config.LOAD:
     VALUES = torch.load(f'data/weights/{config.LOAD_FILE}')
@@ -45,19 +45,20 @@ class Agent:
         self.t = 0        # used to discretize time
         self.score = 0
         self.sequence_count = 0
-        
+        self.Q = VALUES
+
         index = J
         if len(sys.argv) > 1 and sys.argv[1].isnumeric:
              index = sys.argv[1]
        
         print(index)
-        self.Q = VALUES
         self.N = N[int(index)]
         self.DISCOUNT = DISCOUNT[int(index)]
         self.STEP_SIZE = STEP_SIZE[int(index)]
-        
         self.score_hist = []
-        self.update_hist = []      
+
+        self.update_hist = []
+        self.max_update = 1        
         self.prev_SAR = []
         print("Created agent")
                                       
@@ -68,20 +69,19 @@ class Agent:
         if self.t % int(self.FPS * config.T_BETWEEN_STATES) == 0:
             # compute current state, reward action
             
-            s = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
-            r = self.compute_reward(y_pos, y_pipe)
+            state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
+            reward = self.compute_reward(y_pos, y_pipe)
             # action = self.compute_action(state, self.compute_epsilon(score))
+            action = self.compute_action(state, self.Q[state][2])
             self.update_uncertainty(score)
-            a = self.compute_action(s, self.Q[s][2])
-            
             
             if config.LOG:
-                self.log_flappy(state=s, reward=r, next_move=a)
+                self.log_flappy(state=state, reward=reward, next_move=action)
             
             # updates values
-            self.n_sarsa(reward_now=r, state_now=s, action_now=a)
+            self.update(reward_now=reward, state_now=state, action_now=action)
             
-            move = FLAP if a == 1 else NO_FLAP
+            move = FLAP if action == 1 else NO_FLAP
 
         return move
         
@@ -111,10 +111,10 @@ class Agent:
             )
 
             C_PIPE = map_bin(
-                x= y_pipe,
-                minimum=config.Y_MIN_LPIPE,
-                maximum=config.Y_MAX_LPIPE,
-                n_bins=NUM_DY_STATES,
+                x= y_pipe-y_pos,
+                minimum=config.Y_MIN_LPIPE-config.BASEY,
+                maximum=config.Y_MAX_LPIPE + 30,
+                n_bins=NUM_PIPE_STATES,
                 enforce_bounds=True)
 
         except ValueError as e:
@@ -148,9 +148,9 @@ class Agent:
         if score > self.score:
             self.score = score
             for s,a,r in self.prev_SAR:
-                uncertainty = self.Q[s][2]
-                uncertainty /= 4
+                uncertainty = self.Q[s][2] / ((1 + self.Q[s][2]) ** (1 + score ** 2))
                 self.Q[s][2] = uncertainty
+
 
     def compute_epsilon(self, score):
         """determines uncertainty of agent in particular situation"""
@@ -165,31 +165,33 @@ class Agent:
         epsilon = 0.05 * median([abs(update)/50 for update in self.update_hist[-50:]]) / self.max_update
         return epsilon
     
-    def n_sarsa(self, reward_now, state_now, action_now):
+    def update(self, reward_now, state_now, action_now):
         self.prev_SAR.append((state_now, action_now, reward_now))
-        if len(self.prev_SAR) > self.N:
+        if len(self.prev_SAR) >self.N:
             s, a, _ = self.prev_SAR.pop(0)
-             
-            rewards = [r[2] for r in self.prev_SAR]
-            G = sum([(self.DISCOUNT ** i) * rewards[i] for i in range(len(rewards))])
+
+            Gt = [self.prev_SAR[r][2]*(self.DISCOUNT ** r) for r in range(len(self.prev_SAR))]
+            value_now = self.Q[state_now][action_now]
+            expected_update = sum(Gt) + value_now * self.DISCOUNT ** len(self.prev_SAR)
             
-
-            self.Q[s][2] /= (1.001)
-            update_size = float(self.STEP_SIZE * (G - self.Q[s][a]))
+            update_size = float(self.STEP_SIZE * (expected_update - self.Q[s][a]))
             self.Q[s][a] += update_size
+            self.Q[s][2] /= 1.0001
             self.update_hist.append(update_size)
 
-    def n_gameover(self):
+    def update_gameover(self):
         while len(self.prev_SAR) > 1:
-            d = self.DISCOUNT
             s, a, _ = self.prev_SAR.pop(0)
-            rewards = [r[2] for r in self.prev_SAR]
-            G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
 
-            self.Q[s][2] /= (1.001)
-            update_size = float(self.STEP_SIZE * (G - self.Q[s][a]))
+            Gt = [self.prev_SAR[r][2]*(self.DISCOUNT ** r) for r in range(len(self.prev_SAR))]
+            value_now = 0
+            expected_update = sum(Gt) + value_now * self.DISCOUNT ** len(self.prev_SAR)
+            
+            update_size = float(self.STEP_SIZE * (expected_update - self.Q[s][a]))
             self.Q[s][a] += update_size
+            self.Q[s][2] /= 1.01
             self.update_hist.append(update_size)
+            
 
     def gameover(self, score):
         now = time.time_ns() / (10 ** 9)
@@ -197,7 +199,7 @@ class Agent:
         self.score_hist.append(score)
         self.t=0
         print(f'Number Episodes = {len(self.score_hist)}')
-        self.n_gameover()
+        self.update_gameover()
         self.score=0
 
         if len(self.score_hist) >= config.EPISODES_PER_SEQUENCE:
