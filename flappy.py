@@ -1,10 +1,11 @@
+from distutils.command.config import config
 from itertools import cycle
 import random
 from re import U
 import sys
 import pygame
 from pygame.locals import *
-from config import *
+import config
 
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
@@ -51,19 +52,10 @@ PIPES_LIST = (
 )
 
 
-try:
-    xrange
-except NameError:
-    xrange = range
-
-
 def main():
     global SCREEN, FPSCLOCK
     pygame.init()
-    FPSCLOCK = pygame.time.Clock()
-    SCREEN = pygame.display.set_mode((SCREENWIDTH, SCREENHEIGHT), display=1)
-    pygame.display.set_caption('Flappy Bird')
-
+    SCREEN = pygame.display.set_mode((config.SCREENWIDTH, config.SCREENHEIGHT), display=1)
     # numbers sprites for score display
     IMAGES['numbers'] = (
         pygame.image.load('assets/sprites/0.png').convert_alpha(),
@@ -85,17 +77,20 @@ def main():
     # base (ground) sprite
     IMAGES['base'] = pygame.image.load('assets/sprites/base.png').convert_alpha()
 
-    # sounds
-    if 'win' in sys.platform:
-        soundExt = '.wav'
-    else:
-        soundExt = '.ogg'
+    if config.SHOW_GRAPHICS:
+        FPSCLOCK = pygame.time.Clock()
+        pygame.display.set_caption('Flappy Bird')
+        # sounds
+        if 'win' in sys.platform:
+            soundExt = '.wav'
+        else:
+            soundExt = '.ogg'
 
-    SOUNDS['die']    = pygame.mixer.Sound('assets/audio/die' + soundExt)
-    SOUNDS['hit']    = pygame.mixer.Sound('assets/audio/hit' + soundExt)
-    SOUNDS['point']  = pygame.mixer.Sound('assets/audio/point' + soundExt)
-    SOUNDS['swoosh'] = pygame.mixer.Sound('assets/audio/swoosh' + soundExt)
-    SOUNDS['wing']   = pygame.mixer.Sound('assets/audio/wing' + soundExt)
+        SOUNDS['die']    = pygame.mixer.Sound('assets/audio/die' + soundExt)
+        SOUNDS['hit']    = pygame.mixer.Sound('assets/audio/hit' + soundExt)
+        SOUNDS['point']  = pygame.mixer.Sound('assets/audio/point' + soundExt)
+        SOUNDS['swoosh'] = pygame.mixer.Sound('assets/audio/swoosh' + soundExt)
+        SOUNDS['wing']   = pygame.mixer.Sound('assets/audio/wing' + soundExt)
 
     while True:
         # select random background sprites
@@ -144,11 +139,11 @@ def showWelcomeAnimation():
     # iterator used to change playerIndex after every 5th iteration
     loopIter = 0
 
-    playerx = int(SCREENWIDTH * 0.2)
-    playery = int((SCREENHEIGHT - IMAGES['player'][0].get_height()) / 2)
+    playerx = int(config.SCREENWIDTH * 0.2)
+    playery = int((config.SCREENHEIGHT - IMAGES['player'][0].get_height()) / 2)
 
-    messagex = int((SCREENWIDTH - IMAGES['message'].get_width()) / 2)
-    messagey = int(SCREENHEIGHT * 0.12)
+    messagex = int((config.SCREENWIDTH - IMAGES['message'].get_width()) / 2)
+    messagey = int(config.SCREENHEIGHT * 0.12)
 
     basex = 0
     # amount by which base can maximum shift to left
@@ -158,48 +153,52 @@ def showWelcomeAnimation():
     playerShmVals = {'val': 0, 'dir': 1}
 
     while True:
-      
+        if config.SHOW_GRAPHICS:
+            for event in pygame.event.get():
+                if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                    pygame.quit()
+                    agent.save()
+                    print('saved agent')
+                    sys.exit()
+                if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
+                    # make first flap sound and return values for mainGame
+                    # SOUNDS['wing'].play()
+                    return {
+                        'playery': playery + playerShmVals['val'],
+                        'basex': basex,
+                        'playerIndexGen': playerIndexGen,
+                    }
 
-        for event in pygame.event.get():
-            if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
-                pygame.quit()
-                agent.save()
-                print('saved agent')
-                sys.exit()
-            if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
-                # make first flap sound and return values for mainGame
-                # SOUNDS['wing'].play()
-                return {
-                    'playery': playery + playerShmVals['val'],
-                    'basex': basex,
-                    'playerIndexGen': playerIndexGen,
-                }
+            # adjust playery, playerIndex, basex
+            if (loopIter + 1) % 5 == 0:
+                playerIndex = next(playerIndexGen)
+            loopIter = (loopIter + 1) % 30
+            basex = -((-basex + 4) % baseShift)
+            playerShm(playerShmVals)
 
-        # adjust playery, playerIndex, basex
-        if (loopIter + 1) % 5 == 0:
-            playerIndex = next(playerIndexGen)
-        loopIter = (loopIter + 1) % 30
-        basex = -((-basex + 4) % baseShift)
-        playerShm(playerShmVals)
+            # draw sprites
+            SCREEN.blit(IMAGES['background'], (0,0))
+            SCREEN.blit(IMAGES['player'][playerIndex],
+                        (playerx, playery + playerShmVals['val']))
+            SCREEN.blit(IMAGES['message'], (messagex, messagey))
+            SCREEN.blit(IMAGES['base'], (basex, config.BASEY))
+            if AGENTMODE:
+                flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
+                pygame.event.post(flap)
 
-        # draw sprites
-        SCREEN.blit(IMAGES['background'], (0,0))
-        SCREEN.blit(IMAGES['player'][playerIndex],
-                    (playerx, playery + playerShmVals['val']))
-        SCREEN.blit(IMAGES['message'], (messagex, messagey))
-        SCREEN.blit(IMAGES['base'], (basex, BASEY))
-        if AGENTMODE:
-            flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
-            pygame.event.post(flap)
-
-        pygame.display.update()
-        FPSCLOCK.tick(FPS)
-
+            pygame.display.update()
+            FPSCLOCK.tick(FPS)
+        else:
+            return {
+                        'playery': playery + playerShmVals['val'],
+                        'basex': basex,
+                        'playerIndexGen': playerIndexGen,
+                    }
 
 def mainGame(movementInfo):
     score = playerIndex = loopIter = 0
     playerIndexGen = movementInfo['playerIndexGen']
-    playerx, playery = int(SCREENWIDTH * 0.2), movementInfo['playery']
+    playerx, playery = int(config.SCREENWIDTH * 0.2), movementInfo['playery']
 
     basex = movementInfo['basex']
     baseShift = IMAGES['base'].get_width() - IMAGES['background'].get_width()
@@ -214,17 +213,17 @@ def mainGame(movementInfo):
 
     # list of upper pipes
     upperPipes = [
-        {'x': SCREENWIDTH + 200, 'y': newPipe1[0]['y']},
-        {'x': SCREENWIDTH + 200 + (SCREENWIDTH / 2), 'y': newPipe2[0]['y']},
+        {'x': config.SCREENWIDTH + 200, 'y': newPipe1[0]['y']},
+        {'x': config.SCREENWIDTH + 200 + (config.SCREENWIDTH / 2), 'y': newPipe2[0]['y']},
     ]
 
     # list of lowerpipe
     lowerPipes = [
-        {'x': SCREENWIDTH + 200, 'y': newPipe1[1]['y']},
-        {'x': SCREENWIDTH + 200 + (SCREENWIDTH / 2), 'y': newPipe2[1]['y']},
+        {'x': config.SCREENWIDTH + 200, 'y': newPipe1[1]['y']},
+        {'x': config.SCREENWIDTH + 200 + (config.SCREENWIDTH / 2), 'y': newPipe2[1]['y']},
     ]
 
-    dt = FPSCLOCK.tick(FPS)/1000
+    dt = FPSCLOCK.tick(FPS)/1000 if config.SHOW_GRAPHICS else 0.001
     pipeVelX = (-128 * dt)
 
     # player velocity, max velocity, downward acceleration, acceleration on flap
@@ -239,25 +238,40 @@ def mainGame(movementInfo):
     playerFlapped = False # True when player flaps
 
     while True:
-        for event in pygame.event.get():
-            if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
-                pygame.quit()
-                agent.save()
-                print('saved agent')
-                sys.exit()
-            if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
-                if playery > -2 * IMAGES['player'][0].get_height():
-                    
+        ############################# agent plays here
+        if AGENTMODE:
+            try:
+                lpipes=lowerPipes.copy()
+                if lpipes[0]['x'] + pipeWidth < config.X_POS_AGENT and len(lpipes) > 1:
+                        lpipes.pop(0)
+                x = lpipes[0]['x'] + pipeWidth
+                y = lpipes[0]['y']
+                pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
+
+                playermove = agent.move(y_pos=playery,y_vel=playerVelY,
+                                        x_pipe = x, y_pipe = y, score=score)
+                if playermove:
                     playerVelY = playerFlapAcc
                     playerFlapped = True
-                    # SOUNDS['wing'].play()
-
+                if score == config.MAX_POINTS_PER_EPISODE:
+                    return {
+                    'y': playery,
+                    'groundCrash': crashTest[1],
+                    'basex': basex,
+                    'upperPipes': upperPipes,
+                    'lowerPipes': lowerPipes,
+                    'score': score,
+                    'playerVelY': playerVelY,
+                    'playerRot': playerRot
+                }
+            except Exception as e:
+                print(e)
         # check for crash here
         crashTest = checkCrash({'x': playerx, 'y': playery, 'index': playerIndex},
-                               upperPipes, lowerPipes)
+                            upperPipes, lowerPipes)
         if crashTest[0]:
             return {
-                'y': BASEY,
+                'y': config.BASEY,
                 'groundCrash': True,
                 'basex': basex,
                 'upperPipes': upperPipes,
@@ -295,7 +309,7 @@ def mainGame(movementInfo):
             # playerRot = 45
 
         playerHeight = IMAGES['player'][playerIndex].get_height()
-        playery += min(playerVelY, BASEY - playery - playerHeight)
+        playery += min(playerVelY, config.BASEY - playery - playerHeight)
 
         # move pipes to left
         for uPipe, lPipe in zip(upperPipes, lowerPipes):
@@ -313,71 +327,45 @@ def mainGame(movementInfo):
             upperPipes.pop(0)
             lowerPipes.pop(0)
 
-        # draw sprites
-        SCREEN.blit(IMAGES['background'], (0,0))
-
-        for uPipe, lPipe in zip(upperPipes, lowerPipes):
-            SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
-            SCREEN.blit(IMAGES['pipe'][1], (lPipe['x'], lPipe['y']))
+        for event in pygame.event.get():
+            if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                pygame.quit()
+                agent.save()
+                print('saved agent')
+                sys.exit()
+            if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
+                if playery > -2 * IMAGES['player'][0].get_height():
+                    playerVelY = playerFlapAcc
+                    playerFlapped = True
+                    # SOUNDS['wing'].play()
         
+        
+        if config.SHOW_GRAPHICS:
+            # draw sprites
+            SCREEN.blit(IMAGES['background'], (0,0))
+            for uPipe, lPipe in zip(upperPipes, lowerPipes):
+                SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
+                SCREEN.blit(IMAGES['pipe'][1], (lPipe['x'], lPipe['y']))
             
-        SCREEN.blit(IMAGES['base'], (basex, BASEY))
-        # print score so player overlaps the score
-        showScore(score)
-
-        # bird circles
-        # haha - clay
-        # Player rotation has a threshold
-        visibleRot = playerRot
-        # if playerRot > playerRotThr:
-        #    visibleRot = playerRotThr
-        
-        playerSurface = pygame.transform.rotate(IMAGES['player'][playerIndex], visibleRot)
-        SCREEN.blit(playerSurface, (playerx, playery))
-
-        ############################# agent plays here
-        if AGENTMODE:
-            try:
-                lpipes=lowerPipes.copy()
-                if lpipes[0]['x'] + pipeWidth < X_POS_AGENT and len(lpipes) > 1:
-                        lpipes.pop(0)
-                x = lpipes[0]['x'] + pipeWidth
-                y = lpipes[0]['y']
-                pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
-
-                playermove = agent.move(y_pos=playery,y_vel=playerVelY,
-                                        x_pipe = x, y_pipe = y, score=score)
-                pygame.event.post(playermove)
-                if score == MAX_POINTS_PER_EPISODE:
-                    return {
-                    'y': playery,
-                    'groundCrash': crashTest[1],
-                    'basex': basex,
-                    'upperPipes': upperPipes,
-                    'lowerPipes': lowerPipes,
-                    'score': score,
-                    'playerVelY': playerVelY,
-                    'playerRot': playerRot
-                }
-            except Exception as e:
-                print(e)
-        ############################# return to gameplay
-
-        pygame.display.update()
-        FPSCLOCK.tick_busy_loop(FPS)
+            SCREEN.blit(IMAGES['base'], (basex, config.BASEY))
+            showScore(score)
+            visibleRot = playerRot
+            playerSurface = pygame.transform.rotate(IMAGES['player'][playerIndex], visibleRot)
+            SCREEN.blit(playerSurface, (playerx, playery))
+            pygame.display.update()
+            FPSCLOCK.tick_busy_loop(FPS)
 
 
 def showGameOverScreen(crashInfo):
     """crashes the player down and shows gameover image"""
     score = crashInfo['score']
-    playerx = SCREENWIDTH * 0.2
+    playerx = config.SCREENWIDTH * 0.2
     playery = crashInfo['y']
     playerHeight = IMAGES['player'][0].get_height()
     playerVelY = crashInfo['playerVelY']
     playerAccY = 2
     playerRot = crashInfo['playerRot']
     playerVelRot = 7
-    #print(score)
     agent.gameover(score)
 
     basex = crashInfo['basex']
@@ -389,50 +377,52 @@ def showGameOverScreen(crashInfo):
     #if not crashInfo['groundCrash']:
         #SOUNDS['die'].play()
 
-    while True:      
-        if AGENTMODE:
-            flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
-            pygame.event.post(flap)
-        for event in pygame.event.get():
-            if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
-                pygame.quit()
-                agent.save()
-                print('saved agent')
-                sys.exit()
-            if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
-                if playery + playerHeight >= BASEY - 1:
-                    return
+    while True:
+        if config.SHOW_GRAPHICS:    
+            if AGENTMODE:
+                flap = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
+                pygame.event.post(flap)
+            for event in pygame.event.get():
+                if event.type == QUIT or (event.type == KEYDOWN and event.key == K_ESCAPE):
+                    pygame.quit()
+                    agent.save()
+                    print('saved agent')
+                    sys.exit()
+                if event.type == KEYDOWN and (event.key == K_SPACE or event.key == K_UP):
+                    if playery + playerHeight >= config.BASEY - 1:
+                        return
 
-        # player y shift
-        if playery + playerHeight < BASEY - 1:
-            playery += min(playerVelY, BASEY - playery - playerHeight)
+            # player y shift
+            if playery + playerHeight < config.BASEY - 1:
+                playery += min(playerVelY, config.BASEY - playery - playerHeight)
 
-        # player velocity change
-        if playerVelY < 15:
-            playerVelY += playerAccY
+            # player velocity change
+            if playerVelY < 15:
+                playerVelY += playerAccY
 
-        # rotate only when it's a pipe crash
-        if not crashInfo['groundCrash']:
-            if playerRot > -90:
-                playerRot -= playerVelRot
+            # rotate only when it's a pipe crash
+            if not crashInfo['groundCrash']:
+                if playerRot > -90:
+                    playerRot -= playerVelRot
 
-        # draw sprites
-        SCREEN.blit(IMAGES['background'], (0,0))
+            # draw sprites
+            SCREEN.blit(IMAGES['background'], (0,0))
 
-        for uPipe, lPipe in zip(upperPipes, lowerPipes):
-            SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
-            SCREEN.blit(IMAGES['pipe'][1], (lPipe['x'], lPipe['y']))
+            for uPipe, lPipe in zip(upperPipes, lowerPipes):
+                SCREEN.blit(IMAGES['pipe'][0], (uPipe['x'], uPipe['y']))
+                SCREEN.blit(IMAGES['pipe'][1], (lPipe['x'], lPipe['y']))
 
-        SCREEN.blit(IMAGES['base'], (basex, BASEY))
-        showScore(score)
+            SCREEN.blit(IMAGES['base'], (basex, config.BASEY))
+            showScore(score)
 
-        playerSurface = pygame.transform.rotate(IMAGES['player'][1], playerRot)
-        SCREEN.blit(playerSurface, (playerx,playery))
-        SCREEN.blit(IMAGES['gameover'], (50, 180))
+            playerSurface = pygame.transform.rotate(IMAGES['player'][1], playerRot)
+            SCREEN.blit(playerSurface, (playerx,playery))
+            SCREEN.blit(IMAGES['gameover'], (50, 180))
 
-        FPSCLOCK.tick(FPS)
-        pygame.display.update()
-
+            FPSCLOCK.tick(FPS)
+            pygame.display.update()
+        else:
+            return
 
 def playerShm(playerShm):
     """oscillates the value of playerShm['val'] between 8 and -8"""
@@ -449,29 +439,27 @@ def getRandomPipe():
     """returns a randomly generated pipe"""
     # y of gap between upper and lower pipe
     pipeHeight = IMAGES['pipe'][0].get_height()
-    pipeX = SCREENWIDTH + 10
+    pipeX = config.SCREENWIDTH + 10
     # Hi, Clay here
-    Y_LIPE = random.randrange(int(Y_MIN_LPIPE), int(Y_MAX_LPIPE))
+    Y_LIPE = random.randrange(int(config.Y_MIN_LPIPE), int(config.Y_MAX_LPIPE))
 
     return [
-        {'x': pipeX, 'y': Y_LIPE - PIPEGAPSIZE - pipeHeight},  # upper pipe
+        {'x': pipeX, 'y': Y_LIPE - config.PIPEGAPSIZE - pipeHeight},  # upper pipe
         {'x': pipeX, 'y': Y_LIPE}, # lower pipe
     ]
-
 
 def oldgetRandomPipe():
     """returns a randomly generated pipe"""
     # y of gap between upper and lower pipe
-    gapY = random.randrange(0, int(BASEY * 0.6 - PIPEGAPSIZE))
-    gapY += int(BASEY * 0.2)
+    gapY = random.randrange(0, int(config.BASEY * 0.6 - config.PIPEGAPSIZE))
+    gapY += int(config.BASEY * 0.2)
     pipeHeight = IMAGES['pipe'][0].get_height()
-    pipeX = SCREENWIDTH + 10
+    pipeX = config.SCREENWIDTH + 10
 
     return [
         {'x': pipeX, 'y': gapY - pipeHeight},  # upper pipe
-        {'x': pipeX, 'y': gapY + PIPEGAPSIZE}, # lower pipe
+        {'x': pipeX, 'y': gapY + config.PIPEGAPSIZE}, # lower pipe
     ]
-
 
 def showScore(score):
     """displays score in center of screen"""
@@ -481,10 +469,10 @@ def showScore(score):
     for digit in scoreDigits:
         totalWidth += IMAGES['numbers'][digit].get_width()
 
-    Xoffset = (SCREENWIDTH - totalWidth) / 2
+    Xoffset = (config.SCREENWIDTH - totalWidth) / 2
 
     for digit in scoreDigits:
-        SCREEN.blit(IMAGES['numbers'][digit], (Xoffset, SCREENHEIGHT * 0.1))
+        SCREEN.blit(IMAGES['numbers'][digit], (Xoffset,config.SCREENHEIGHT * 0.1))
         Xoffset += IMAGES['numbers'][digit].get_width()
 
 def checkCrash(player, upperPipes, lowerPipes):
@@ -494,7 +482,7 @@ def checkCrash(player, upperPipes, lowerPipes):
     player['h'] = IMAGES['player'][0].get_height()
 
     # if player crashes into ground
-    if player['y'] + player['h'] >= BASEY - 1:
+    if player['y'] + player['h'] >= config.BASEY - 1:
         return [True, True]
     elif player['y'] + player['h'] <= 0:
         return [True, True]
@@ -534,8 +522,8 @@ def pixelCollision(rect1, rect2, hitmask1, hitmask2):
     x1, y1 = rect.x - rect1.x, rect.y - rect1.y
     x2, y2 = rect.x - rect2.x, rect.y - rect2.y
 
-    for x in xrange(rect.width):
-        for y in xrange(rect.height):
+    for x in range(rect.width):
+        for y in range(rect.height):
             if hitmask1[x1+x][y1+y] and hitmask2[x2+x][y2+y]:
                 return True
     return False
@@ -543,9 +531,9 @@ def pixelCollision(rect1, rect2, hitmask1, hitmask2):
 def getHitmask(image):
     """returns a hitmask using an image's alpha."""
     mask = []
-    for x in xrange(image.get_width()):
+    for x in range(image.get_width()):
         mask.append([])
-        for y in xrange(image.get_height()):
+        for y in range(image.get_height()):
             mask[x].append(bool(image.get_at((x,y))[3]))
     return mask
 

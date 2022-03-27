@@ -12,8 +12,8 @@ import torch
 import sys
 
 # Actions
-NO_FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
-FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
+NO_FLAP = False
+FLAP = True
 
 # States
 NUM_Y_STATES = 20                   # encodes height of player (this should be odd for keeping in center)
