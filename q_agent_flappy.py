@@ -1,24 +1,20 @@
 from distutils.command.config import config
 from itertools import cycle
+from os import remove
 import random
-import copy
 from re import U
 import sys
-from typing import Deque
 import pygame
 from pygame.locals import *
+import torch
 import config
 
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
-SPEEDUP_FACTOR = 10
-from q_agent import Agent
-from q_learning import QLearning
+SPEEDUP_FACTOR = 15
+from q_learning import Agent
 FPS = 30 * SPEEDUP_FACTOR
-agent = QLearning(True)
-STATE_HISTORY = Deque(maxlen=70)  # 70 is distance between pipes
-REPLAY_BUFFER = []
-
+agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 
 # image, sound and hitmask  dicts
 IMAGES, SOUNDS, HITMASKS = {}, {}, {}
@@ -201,6 +197,8 @@ def showWelcomeAnimation():
                         'playerIndexGen': playerIndexGen,
                     }
 
+REPLAYS = []
+VALUES = [(agent.Q,0)]
 def mainGame(movementInfo):
     score = playerIndex = loopIter = 0
     playerIndexGen = movementInfo['playerIndexGen']
@@ -243,58 +241,51 @@ def mainGame(movementInfo):
     playerFlapAcc = -9   # players speed on flapping
     playerFlapped = False # True when player flaps
 
-
-    # When starting the game, if we have state history to resume from then use it until it passes that pipe
-    # If history is less than 20 frames this isn't enough for the bird to learn from (loop of dying) so clear the queue
-    if len(STATE_HISTORY) < 20:
-        STATE_HISTORY.clear()
-    resume_from_history = len(STATE_HISTORY) > 0 if agent.train else None  # only resume if training
-    initial_len_history = len(STATE_HISTORY)
-    resume_from = 0
-    current_score = STATE_HISTORY[-1][5] if resume_from_history else None  # reset if beats the latest score in history
-    print_score = False  # has the current score been printed?
-
-
     while True:
         
         # check for crash here
         crashTest = checkCrash({'x': playerx, 'y': playery, 'index': playerIndex},
                             upperPipes, lowerPipes)
         if crashTest[0]:
-            if resume_from_history:  # current_score is based on STATE_HISTORY
-                # Managed to pass the difficult pipe
-                if score > current_score:
-                    agent.update_qvalues(score)
-                else:
-                    REPLAY_BUFFER.append(copy.deepcopy(agent.moves))
-                # Or stuck in resume loop
-                if score > current_score or len(REPLAY_BUFFER) >= 50:
-                    # Update with a sample of the REPLAY_BUFFER (sample to avoid overfitting)
-                    random.shuffle(REPLAY_BUFFER)
-                    for _ in range(5):
-                        if REPLAY_BUFFER:  # don't pop if list is empty
-                            agent.moves = REPLAY_BUFFER.pop()
-                            agent.update_qvalues(current_score)
-                    STATE_HISTORY.clear()
-                    REPLAY_BUFFER.clear()
-            else:
-                agent.update_qvalues(score)  # only updates if training by default
-            if agent.train:
-                print(f"Episode: {agent.episode}, alpha: {agent.alpha}, score: {score}, max_score: {agent.max_score}")
-                agent.end_episode(score)
-            else:
-                print(f"Episode: {agent.episode}, score: {score}, max_score: {agent.max_score}")
+            lpipes=lowerPipes.copy()
+            if lpipes[0]['x'] + pipeWidth < config.X_POS_AGENT and len(lpipes) > 1:
+                    lpipes.pop(0)
+            x = lpipes[0]['x'] + pipeWidth
+            y = lpipes[0]['y']
+            state = agent.compute_state(playery,y_vel=playerVelY, x_pipe = x, y_pipe = y)
+            agent.prev_SAR.append((state, 0, 0))
+            
+            global REPLAYS
+            global VALUES
+            
+            # log values for high scores
+            if score >= max(agent.score_hist) * .8:
+                REPLAYS = []
+                VALUES.append((agent.Q.clone(), score))
+                for q in reversed(range(len(VALUES))):
+                    s = VALUES[q][1]
+                    if s < .8 * max(agent.score_hist):
+                        VALUES.pop(q)
+
+
+            agent.gameover(y_pos=playery,y_vel=playerVelY, x_pipe = x, y_pipe = y, score=score, update=True)               
+            REPLAYS.append(agent.prev_SAR.copy())
+            if len(REPLAYS) >= 300:
+                REPLAYS = []
+                q = random.sample(VALUES, 1)[0]
+                agent.Q = q[0]
+                
             return {
-                'y': playery,
-                'groundCrash': crashTest[1],
+                'y': config.BASEY,
+                'groundCrash': True,
                 'basex': basex,
                 'upperPipes': upperPipes,
                 'lowerPipes': lowerPipes,
                 'score': score,
                 'playerVelY': playerVelY,
-                # 'playerRot': playerRot
+                'playerRot': playerRot
             }
-        
+            
         ############################# agent plays here
         if AGENTMODE:
             try:
@@ -305,17 +296,12 @@ def mainGame(movementInfo):
                 y = lpipes[0]['y']
                 pygame.draw.circle(SCREEN,(255,0,0),(x,y),5.5)
 
-                # playermove = agent.move(y_pos=playery,y_vel=playerVelY,
-                                        #x_pipe = x, y_pipe = y, score=score)
-
-                playermove = agent.act(playerx, playery, playerVelY, lowerPipes)
+                playermove = agent.move(y_pos=playery,y_vel=playerVelY,
+                                        x_pipe = x, y_pipe = y, score=score)
                 if playermove:
-                    if playery > -2 * IMAGES['player'][0].get_height():
-                        playerVelY = playerFlapAcc
-                        playerFlapped = True
-
+                    playerVelY = playerFlapAcc
+                    playerFlapped = True
                 if score == config.MAX_POINTS_PER_EPISODE:
-                    agent.end_episode(score)
                     return {
                     'y': playery,
                     'groundCrash': crashTest[1],
@@ -413,9 +399,8 @@ def showGameOverScreen(crashInfo):
     playerHeight = IMAGES['player'][0].get_height()
     playerVelY = crashInfo['playerVelY']
     playerAccY = 2
-    # playerRot = crashInfo['playerRot']
+    playerRot = crashInfo['playerRot']
     playerVelRot = 7
-    #agent.gameover(score)
 
     basex = crashInfo['basex']
 
@@ -448,6 +433,12 @@ def showGameOverScreen(crashInfo):
             # player velocity change
             if playerVelY < 15:
                 playerVelY += playerAccY
+
+            # rotate only when it's a pipe crash
+            if not crashInfo['groundCrash']:
+                if playerRot > -90:
+                    playerRot -= playerVelRot
+
             # draw sprites
             SCREEN.blit(IMAGES['background'], (0,0))
 
@@ -458,6 +449,8 @@ def showGameOverScreen(crashInfo):
             SCREEN.blit(IMAGES['base'], (basex, config.BASEY))
             showScore(score)
 
+            playerSurface = pygame.transform.rotate(IMAGES['player'][1], playerRot)
+            SCREEN.blit(playerSurface, (playerx,playery))
             SCREEN.blit(IMAGES['gameover'], (50, 180))
 
             FPSCLOCK.tick(FPS)
