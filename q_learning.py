@@ -1,226 +1,263 @@
-from math import exp, pi
-from random import random
-from turtle import update
-import numpy as np
-from typing import List
-import pygame
-import time
 import config
-import torch
+import json
+import random
 
-# Actions
-NO_FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_a)
-FLAP = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE)
 
-# States
-NUM_Y_STATES = 20                   # encodes height of player (this should be odd for keeping in center)
-NUM_V_STATES = 10                   # encodes player velocity
-NUM_DX_STATES = 1                   # encodes distance from pipe to player
-NUM_PIPE_STATES = 10                 # encodes center position between pipes
-NUM_ACTIONS = 2
+class QLearning:
+    """
+    A Q-Learning agent.
 
-# Values
-VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)) * 1.5
-if config.LOAD:
-    VALUES = torch.load(f'rl/sarsa_lamb/{config.LOAD_FILE}')
+    Load the Q-Learning agent Q-table (data/q_values.json) and training states (data/training_values.json) from file .
+    To train a new agent specify new file names to load and save to.
+    """
+    def __init__(self, train):
+        """
+        Initialise the agent
+        :param train: train or run
+        """
+        self.train = train  # train or run
+        self.discount_factor = 0.95  # q-learning discount factor
+        self.alpha = 0.7  # learning rate
+        # self.epsilon = 0.1  # chance to explore vs take local optimum
+        self.reward = {0: 0, 1: -1000}  # reward function, focus on only not dying
 
-# Parameters
-J = 0           # index selection for the next run
-N              = [1, 3, 5, 7, 9, 11]
-DISCOUNT       = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
-STEP_SIZE      = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+        # Stabilize and converge to optimal policy
+        self.alpha_decay = 0.00003  # 20,000 episodes to fully decay
+        # self.epsilon_decay = 0.00001  # 10,000 episodes to not explore anymore
 
-SEQUENCE_COUNT = 0
+        # Save states
+        self.episode = 0
+        self.previous_action = 0
+        self.previous_state = "0_0_0_0"  # initial position (x0, y0, vel, y1)
+        self.moves = []
+        self.scores = []
+        self.max_score = 0
 
-# Learns on policy
-class Agent:
-    def __init__(self, FPS):
-        self.FPS = FPS
-        self.t = 0        # used to discretize game
-        self.Q = VALUES
-        self.score_hist = []
-        self.update_hist = []
-        
-        self.prev_SAR = []
-        print("Created agent")
-                                      
-    def move(self, y_pos, y_vel, x_pipe, y_pipe,score):        
-        move = NO_FLAP
+        # Load states, add states to q-table as they are experienced rather than pre-initializing q-table
+        self.q_values = {}  # q-table[state][action] decides which action to take by comparing q-values
+        self.load_qvalues()
+        self.load_training_states()
 
-        self.t = (1 + self.t) % int(self.FPS * config.T_BETWEEN_STATES)        
-        if self.t == 0:
-            # compute current state, reward action
-            
-            state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
-            reward = self.compute_reward(y_pos, y_pipe)
-            action = self.compute_action(state, self.compute_epsilon(score))
-            if config.LOG:
-                self.log_flappy(state=state, reward=reward, next_move=action)
-            
-            # updates values
-            self.n_sarsa(reward_now=reward, state_now=state, action_now=action)
-            
-            move = FLAP if action == 1 else NO_FLAP
-
-        return move
-        
-    def compute_state(self, y_pos, y_vel, x_pipe, y_pipe):
+    def load_qvalues(self):
+        """Load q values and from json file."""
+        print("Loading Q-table states from json file...")
         try:
-            Y_POS = map_bin(
-                x=y_pos,
-                minimum=config.Y_MIN_AGENT-50,
-                maximum=config.Y_MAX_AGENT,
-                n_bins=NUM_Y_STATES,
-                enforce_bounds=True
-            )
+            with open("data/q_values_resume.json", "r") as f:
+                self.q_values = json.load(f)
+        except IOError:
+            self.init_qvalues(self.previous_state)
 
-            Y_VEL = map_bin(
-                x=y_vel,
-                minimum=config.Y_MIN_VELOCITY,
-                maximum=config.Y_MAX_VELOCITY,
-                n_bins=NUM_V_STATES
-            )
+    def init_qvalues(self, state):
+        """
+        Initialise q values if state not yet seen.
+        :param state: current state
+        """
+        if self.q_values.get(state) is None:
+            self.q_values[state] = [0, 0, 0]  # [Q of no action, Q of flap action, Times experienced this state]
 
-            DX = map_bin(
-                x=x_pipe-config.X_POS_AGENT,
-                minimum=0,
-                maximum=config.X_MAX_PIPE,
-                n_bins=NUM_DX_STATES,
-                enforce_bounds=False
-            )
+    def load_training_states(self):
+        """Load current training state from json file."""
+        if self.train:
+            print("Loading training states from json file...")
+            try:
+                with open("data/training_values_resume.json", "r") as f:
+                    training_state = json.load(f)
+                    self.episode = training_state['episodes'][-1]
+                    self.scores = training_state['scores']
+                    self.alpha = max(self.alpha - self.alpha_decay * self.episode, 0.1)
+                    # self.epsilon = max(self.epsilon - self.epsilon_decay * self.episode, 0)
+                    self.max_score = max(self.scores)
+            except IOError:
+                pass
 
-            C_PIPE = map_bin(
-                x= y_pipe,
-                minimum=config.Y_MIN_LPIPE - config.PIPEGAPSIZE/2 - 1,
-                maximum=config.Y_MAX_LPIPE - config.PIPEGAPSIZE/2 + 1,
-                n_bins=NUM_PIPE_STATES,
-                enforce_bounds=False)
+    def act(self, x, y, vel, pipe):
+        """
+        Agent performs an action within the FlapPyBird environment.
+        :param x: bird x
+        :param y: bird y
+        :param vel: bird y velocity
+        :param pipe: pipe
+        :return: action to take (do nothing or flap)
+        """
+        # store the transition from previous state to current state
+        state = self.get_state(x, y, vel, pipe)
+        if self.train:
+            self.moves.append((self.previous_state, self.previous_action, state))  # add the experience to history
+            self.reduce_moves()
+            self.previous_state = state  # update the last_state with the current state
 
-        except ValueError as e:
-            print(e)
-            raise ValueError
+            # Epsilon greedy policy for action, chance to explore
+            # Remove since exploration is not efficient or required for this agent and environment
+            # if random.random() <= self.epsilon:
+            #     self.previous_action = random.choice([0, 1])
+            #     return self.previous_action
 
-        return (Y_POS, Y_VEL, DX, C_PIPE)
+        # Best action with respect to current state, default is 0 (do nothing), 1 is flap
+        self.previous_action = 0 if self.q_values[state][0] >= self.q_values[state][1] else 1
 
-    def compute_reward(self, y_pos, y_pipe):
-        return 1
-        from math import sqrt
-        sigma = 60
-        dx = y_pipe - y_pos
-        reward = exp(- (dx**2) / (2 * sigma**2) )
-        return reward
+        return self.previous_action
 
-    def compute_action(self, state, epsilon):
-        "returns the esilon-greedy action over the possible"
-        # Sanity check
-        if epsilon < 0 or 1 < epsilon:
-            raise ValueError(f"epsilon = {epsilon} which is not in [0,1]")
+    def update_qvalues(self, score):
+        """
+        Update q values using history.
+        :param score: score for this episode
+        """
+        self.episode += 1
+        self.scores.append(score)
+        self.max_score = max(score, self.max_score)
 
-        Q = VALUES[state]
-        greedy_indices = (Q == max(Q)).nonzero(as_tuple=True)[0]
-        random_greedy_index = greedy_indices[torch.randint(len(greedy_indices), (1,))][0]
-        
-        if np.random.uniform(0, 1) >= epsilon: # true (1-epsilon)% of the time
-            return int(random_greedy_index)
+        if self.train:
+            history = list(reversed(self.moves))
+            # Flag if the bird died in the top pipe, don't flap if this is the case
+            high_death_flag = True if int(history[0][2].split("_")[1]) > 120 else False
+            t, last_flap = 0, True
+            for move in history:
+                t += 1
+                state, action, new_state = move
+                self.q_values[state][2] += 1  # number of times this state has been seen
+                curr_reward = self.reward[0]
+                # Select reward
+                if t <= 2:
+                    # Penalise last 2 states before dying
+                    curr_reward = self.reward[1]
+                    if action:
+                        last_flap = False
+                elif (last_flap or high_death_flag) and action:
+                    # Penalise flapping
+                    curr_reward = self.reward[1]
+                    last_flap = False
+                    high_death_flag = False
+
+                self.q_values[state][action] = (1 - self.alpha) * (self.q_values[state][action]) + \
+                                               self.alpha * (curr_reward + self.discount_factor *
+                                                             max(self.q_values[new_state][0:2]))
+
+            # Decay values for convergence
+            if self.alpha > 0.1:
+                self.alpha = max(self.alpha_decay - self.alpha_decay, 0.1)
+            # if self.epsilon > 0:
+            #     self.epsilon = max(self.epsilon - self.epsilon_decay, 0)
+
+            # Don't need to reset previous action or state since this doesn't matter for all the beginning states
+            # Although wikipedia mentions a reset of initial conditions tends to predict human behaviour more accurately
+            self.moves = []  # clear history after updating strategies
+
+    def get_state(self, x, y, vel, pipe):
+        """
+        Get current state of bird in environment.
+        :param x: bird x
+        :param y: bird y
+        :param vel: bird y velocity
+        :param pipe: pipe
+        :return: current state (x0_y0_v_y1) where x0 and y0 are diff to pipe0 and y1 is diff to pipe1
+        """
+
+        # Get pipe coordinates
+        pipe0, pipe1 = pipe[0], pipe[1]
+        if x - pipe[0]["x"] >= 50:
+            pipe0 = pipe[1]
+            if len(pipe) > 2:
+                pipe1 = pipe[2]
+
+        x0 = pipe0["x"] - x
+        y0 = pipe0["y"] - y
+        if -50 < x0 <= 0:
+            y1 = pipe1["y"] - y
         else:
-            ungreedy_indices = (Q != max(Q)).nonzero(as_tuple=True)[0]
-            if len(ungreedy_indices) == 0:
-                return int(random_greedy_index)
-            else:
-                random_ungreedy_index = ungreedy_indices[torch.randint(len(ungreedy_indices), (1,))][0]
-                return int(random_ungreedy_index)
+            y1 = 0
 
-    def compute_epsilon(self, score):
-        return .05 / (1 + score)
-    
+        # Evaluate player position compared to pipe
+        if x0 < -40:
+            x0 = int(x0)
+        elif x0 < 140:
+            x0 = int(x0) - (int(x0) % 10)
+        else:
+            x0 = int(x0) - (int(x0) % 70)
 
-    def n_sarsa(self, reward_now, state_now, action_now):
-        self.prev_SAR.append((state_now, action_now, reward_now))
-        if len(self.prev_SAR) > N[J]:
-            d = DISCOUNT[J]
-            s0, a0, r0 = self.prev_SAR.pop(0)
-            rewards = [r[2] for r in self.prev_SAR]
-            G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
-            
-            update_size = float(STEP_SIZE[J] * (G - self.Q[s0][a0]))
-            self.Q[s0][a0] += update_size
-            self.update_hist.append(update_size)
+        if -180 < y0 < 180:
+            y0 = int(y0) - (int(y0) % 10)
+        else:
+            y0 = int(y0) - (int(y0) % 60)
 
-    def n_gameover(self):
-        while len(self.prev_SAR) > 1:
-            d = DISCOUNT[J]
-            s0, a0, r0 = self.prev_SAR.pop(0)
-            rewards = [r[2] for r in self.prev_SAR]
-            G = sum([(d ** i) * rewards[i] for i in range(len(rewards))])
-            self.Q[s0][a0] += STEP_SIZE[J] * (G - self.Q[s0][a0])
+        if -180 < y1 < 180:
+            y1 = int(y1) - (int(y1) % 10)
+        else:
+            y1 = int(y1) - (int(y1) % 60)
 
-    def gameover(self, score):
-        now = time.time_ns() / (10 ** 9)
-        print(f'GAMEOVER: score = {score}')
-        self.score_hist.append(score)
-        print(f'Number Episodes = {len(self.score_hist)}')
-        self.n_gameover()
+        state = str(int(x0)) + "_" + str(int(y0)) + "_" + str(int(vel)) + "_" + str(int(y1))
+        self.init_qvalues(state)
+        return state
 
-        if len(self.score_hist) >= config.EPISODES_PER_SEQUENCE:
+    def reduce_moves(self, reduce_len=1000000):
+        """
+        Reduce length of moves if greater than reduce_len.
+        :param reduce_len: reduce moves in memory if greater than this length, default 1 million
+        """
+        if len(self.moves) > reduce_len:
+            history = list(reversed(self.moves[:reduce_len]))
+            for move in history:
+                state, action, new_state = move
+                # Save q_values with default of 0 reward (bird not yet died)
+                self.q_values[state][action] = (1 - self.alpha) * (self.q_values[state][action]) + \
+                                               self.alpha * (self.reward[0] + self.discount_factor *
+                                                             max(self.q_values[new_state][0:2]))
+            self.moves = self.moves[reduce_len:]
+
+    def end_episode(self, score):
+        """End the run for this episode."""
+        self.episode += 1
+        if self.episode >= config.EPISODES_PER_SEQUENCE:
             self.save()
-            from datetime import datetime
-            global SEQUENCE_COUNT
-            global J
-            # make file
-            datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")     
-            torch.save(self.score_hist, f"rl/n_sarsa/results/sarsa-disc-{DISCOUNT[J]}-rate-{STEP_SIZE[J]}-{datetime}")
-            self.Q = VALUES
-            self.score_hist = []
-            
-            SEQUENCE_COUNT += 1
-            if SEQUENCE_COUNT >= config.SEQUENCE_PER_PARAMETER:
-                J += 1
-                if J == len(N):
-                    exit(0)
-                
-
+            import sys
+            sys.exit()
+        self.scores.append(score)
+        self.max_score = max(score, self.max_score)
+        if self.train:
+            history = list(reversed(self.moves))
+            for move in history:
+                state, action, new_state = move
+                # Save q_values with default of 0 reward (bird not yet died)
+                self.q_values[state][action] = (1 - self.alpha) * (self.q_values[state][action]) + \
+                                               self.alpha * (self.reward[0] + self.discount_factor *
+                                                             max(self.q_values[new_state][0:2]))
+            self.moves = []
+        
     def save(self):
+        import config
+        self.save_qvalues()
+        self.save_training_states()
         if config.SAVE == False:
             return
         from datetime import datetime
-        datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")    
-        file_name = f"rl/n_sarsa/weights/{datetime}.pt"
-        torch.save(self.Q, file_name)
+        dt = datetime.now().strftime("%m-%d-%Y-%H.%M.%S")
+        saved = False
+        while saved == False:
+            try:
+                open(f"data/scores/qlearning-rate-{self.alpha}-{dt}.txt", 'x') 
+                with open(f"data/scores/qlearning-rate-{self.alpha}-{dt}.txt", 'w') as f:
+                    f.write(str(self.scores))
+                saved = True
+            except Exception as e:
+                print(e)
+                dt = datetime.now().strftime("%m-%d-%Y %H.%M.%S")
 
-    def log_flappy(self, state, reward, next_move) -> None:
-        print(f'State = {state}')
-        print(f'Reward = {reward}')
-        print(f'Action = ' + ("Flap" if next_move == 1 else "No Flap"))
-        print(f'V(NO_FLAP): {self.Q[state][0]}')
-        print(f'V(FLAP): {self.Q[state][1]}')
-        
-        print()
+    def save_qvalues(self):
+        """Save q values to json file."""
+        if self.train:
+            print(f"Saving Q-table with {len(self.q_values.keys())} states to file...")
+            from datetime import datetime
+            dt = datetime.now().strftime("%m-%d-%Y-%H.%M.%S")
+            open(f"data/weights/qlearning-qvalues-alpha-{self.alpha}-{dt}.json", 'x')
+            with open(f"data/weights/qlearning-qvalues-alpha-{self.alpha}-{dt}.json", "w") as f:
+                json.dump(self.q_values, f)
 
-def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
-            f=lambda x: x, one_indexed=False, enforce_bounds=True):
-    # Sanity check
-    if minimum > maximum:
-        raise ValueError("minimum was not less than maximum")
-    elif n_bins <= 0:
-        raise ValueError("number of bins in positive")
-    elif x < minimum:
-        if enforce_bounds:
-            raise ValueError("x was less than minimim")
-        else:
-            x = minimum
-    elif x > maximum:
-        if enforce_bounds:
-            raise ValueError("x was greater than maximum")
-        else:
-            x = maximum
-
-    # map to bin
-    from math import floor
-    _hash = (x - minimum) / (maximum - minimum)
-    _hash = _hash if _hash < 0.0000001 else _hash - 0.0000001
-    _hash = f(_hash) * n_bins
-    _hash = floor(_hash)
-    if one_indexed:
-        return _hash + 1
-    else:
-        return _hash
+    def save_training_states(self):
+        if self.train:
+            """Save current training state to json file."""
+            print(f"Saving training states with {self.episode} episodes to file...")
+            from datetime import datetime
+            dt = datetime.now().strftime("%m-%d-%Y-%H.%M.%S")
+            open(f"data/weights/qlearning-training_values_resume-alpha-{self.alpha}-{dt}.json", 'x')
+            with open(f"data/weights/qlearning-training_values_resume-alpha-{self.alpha}-{dt}.json", "w") as f:
+                json.dump({'episodes': [i+1 for i in range(self.episode)],
+                           'scores': self.scores}, f)
