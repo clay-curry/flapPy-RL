@@ -12,7 +12,7 @@ import config
 # Hi, Clay here. Edit this to turn on the agent
 AGENTMODE = True
 SPEEDUP_FACTOR = 15
-from q_learning import Agent
+from q_agent import Agent
 FPS = 30 * SPEEDUP_FACTOR
 agent = Agent(FPS=FPS/SPEEDUP_FACTOR)
 

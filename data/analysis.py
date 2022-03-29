@@ -34,7 +34,7 @@ def score_scatter(data: List[List[int]]):
         }
     title_font = label_font.copy()
     title_font['size'] = 16
-    ax.set_title(r"$\pi$ Iteration with Q-Learning ($\alpha$ = 0.2)", fontdict=title_font,pad=10)
+    ax.set_title(r"Q-Learning with Variable Rewards", fontdict=title_font,pad=10)
     ax.set_ylabel("Score (stopped at 300)", fontdict=label_font,labelpad=4)
     ax.set_xlabel("Episodes", fontdict=label_font)
     ax.set_ylim(0, 300)
@@ -89,17 +89,17 @@ def score_scatter(data: List[List[int]]):
 
     high_scores = [max(run) for run in data]
     high_score_first_occurance = [run.index(hi) for hi, run in zip(high_scores, data)]
-    
     x = max(high_score_first_occurance)
     y = high_scores[high_score_first_occurance.index(x)]
-
+    print(x)
     ax.annotate(
-        '$\pi_*$ obtained\n$\\forall$ agents',
-        xy=(x, y), xycoords='data',
-        xytext=(-150, -65), textcoords='offset points',
-        arrowprops=dict(
-        arrowstyle="->",
-        connectionstyle="arc,angleA=0,armA=01,angleB=-90,armB=30,rad=7"))
+    'candidate $\pi_*$\nis observed\n$\\forall$ agents',
+    xy=(x, y), xycoords='data',
+    xytext=(-150, -200), textcoords='offset points',
+    arrowprops=dict(
+        color='red',
+    arrowstyle="->",
+    connectionstyle="arc,angleA=0,armA=01,angleB=-90,armB=30,rad=7"))
 
     # plot random points
     import random

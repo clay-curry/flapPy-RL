@@ -25,44 +25,34 @@ NUM_ACTIONS = 2
 
 # Training Parameters
 J = 5           # overridden by command line arguments; determines which parameter index to use
-N              = [1, 3, 6, 9, 12, 15]
+EPSILON        = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 DISCOUNT       = [0.9, 0.9, 0.9, 0.9, 0.9, 0.9]
 STEP_SIZE      = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
 # Values + Uncertainty
-VALUES = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS + 1)) * 3
-VALUES[:,:,:,:,1] /= 1.01    # gives no-flap more value
-VALUES[:,:,:,:,2] = 0.1     # certainty, initialized to 20%, reduced as points are awarded
-
-if config.LOAD:
-    VALUES = torch.load(f'data/weights/{config.LOAD_FILE}')
-
-
 
 # Learns on policy
 class Agent:
     def __init__(self, FPS):
         self.FPS = FPS
         self.t = 0        # used to discretize time
-        self.score = 0
+        self.score_hist = [0]  
         self.sequence_count = 0
-        self.Q = VALUES
+        self.hist_size = 300
+        self.Q = makeQ()
 
-        index = J
         if len(sys.argv) > 1 and sys.argv[1].isnumeric:
-             index = sys.argv[1]
-       
-        print(index)
-        self.N = N[int(index)]
-        self.DISCOUNT = DISCOUNT[int(index)]
-        self.STEP_SIZE = STEP_SIZE[int(index)]
-        self.score_hist = []
-        self.epsilon = 0.1
+            cmd_arg = sys.argv[1]
+            self.EPSILON = EPSILON[int(cmd_arg)]
+            self.DISCOUNT = DISCOUNT[int(cmd_arg)]
+            self.STEP_SIZE = STEP_SIZE[int(cmd_arg)]
+        else:
+            self.EPSILON = EPSILON[int(J)]
+            self.DISCOUNT = DISCOUNT[int(J)]
+            self.STEP_SIZE = STEP_SIZE[int(J)]
 
-        self.update_hist = []
-        self.max_update = 1        
         self.prev_SAR = []
-        print("Created agent")
+        print("Created Q Learning Agent")
                                       
     def move(self, y_pos, y_vel, x_pipe, y_pipe,score):        
         move = NO_FLAP
@@ -72,13 +62,12 @@ class Agent:
             # compute current state, reward action
             state = self.compute_state(y_pos, y_vel, x_pipe, y_pipe)
             reward = self.compute_reward(y_pos, y_pipe)
-            action = self.compute_action(state, epsilon=self.epsilon)
-
+            action = self.compute_action(state, epsilon=self.EPSILON)
+            self.prev_SAR.append((state, action, reward))
             if config.LOG:
                 self.log_flappy(state=state, reward=reward, next_move=action)
             
-            # updates values
-            self.update(reward_now=reward, state_now=state, action_now=action)
+            # self.update(reward_now=reward, state_now=state, action_now=action)
             
             move = FLAP if action == 1 else NO_FLAP
 
@@ -110,9 +99,9 @@ class Agent:
             )
 
             C_PIPE = map_bin(
-                x= y_pipe-y_pos,
-                minimum=config.Y_MIN_LPIPE-config.BASEY,
-                maximum=config.Y_MAX_LPIPE + 30,
+                x= y_pipe,
+                minimum=config.Y_MIN_LPIPE,
+                maximum=config.Y_MAX_LPIPE,
                 n_bins=NUM_PIPE_STATES,
                 enforce_bounds=True)
 
@@ -131,53 +120,68 @@ class Agent:
         if epsilon < 0 or 1 < epsilon:
             raise ValueError(f"epsilon = {epsilon} which is not in [0,1]")
 
-        Q = self.Q[state]
-        greedy_index = randrange(0, 2)
-        if Q[0] > Q[1]:
-            greedy_index = 0
-        elif Q[0] < Q[1]:
-            greedy_index = 1
+        greedy_index = 0        # no flap by default
+        if self.Q[state][1] > self.Q[state][0]:
+            greedy_index = 1    # flap if greedy
 
         if np.random.uniform(0, 1) >= epsilon: # true (1-epsilon)% of the time
-            return int(greedy_index)
+            return greedy_index
         else:
             return 1 - greedy_index
 
-
     def update(self, reward_now, state_now, action_now):
         self.prev_SAR.append((state_now, action_now, reward_now))
-        if len(self.prev_SAR) > 1:
+        
+        if len(self.prev_SAR) > self.hist_size:
             s,a,_ = self.prev_SAR.pop(0)
-            max_action = max(self.Q[s][0:2])
+            state_now, action_now, reward_now = self.prev_SAR[0]
+            max_action = max(self.Q[state_now])
             expected_update = self.STEP_SIZE * (reward_now + self.DISCOUNT * max_action - self.Q[s][a])
             self.Q[s][a] += expected_update
-            self.Q[s][a]=self.Q[s][a]
+            self.Q[s][a]=self.Q[s][a]             
             
 
     def update_gameover(self):
+        s = self.prev_SAR.pop()[0]
+        pipe_height = config.Y_MIN_LPIPE + s[3] / (NUM_PIPE_STATES - 1) * (config.Y_MAX_LPIPE - config.Y_MIN_LPIPE)
+        agent_height = config.BASEY * s[0] / (NUM_Y_STATES-1)
+        low_death = False
+        low_update = 0
+        if agent_height > pipe_height:
+            print('low')
+            low_death = True           
+        
+        Gt = 0
+        self.prev_SAR.reverse()
         while len(self.prev_SAR) > 0:
-            s,a,_ = self.prev_SAR.pop(0)
-            max_action = max(self.Q[s][0:2])
-            expected_update = self.STEP_SIZE * (0 + self.DISCOUNT * max_action - self.Q[s][a])
-            self.Q[s][a] += expected_update
+            s, a, r = self.prev_SAR.pop(0)
+            if low_death and self.Q[s][0] >= self.Q[s][1]:
+                self.Q[s][1]  = self.Q[s][0] + 0.1
+                low_update += 1
+                if low_update == 2:
+                    low_death = False
+            else:
+                self.Q[s][a] += self.STEP_SIZE * (Gt - self.Q[s][a])
+                Gt = r + self.DISCOUNT * Gt
 
 
-    def gameover(self, score):
-        now = time.time_ns() / (10 ** 9)
-        print(f'GAMEOVER({self.N}): score = {score}')
+
+    def gameover(self, y_pos, y_vel, x_pipe, y_pipe, score,update):
+        self.t = 0
+        self.EPSILON /= 1.00138640
+
+        if update:
+            self.update_gameover()
+
         self.score_hist.append(score)
-        self.t=0
+        print(f'GAMEOVER(Q Learning): score = {score} max = {max(self.score_hist)}')
         print(f'Number Episodes = {len(self.score_hist)}')
-        self.update_gameover()
-        self.score=0
-        self.epsilon /= 1.000138640
+        
         if len(self.score_hist) >= config.EPISODES_PER_SEQUENCE:
             self.save()
             from datetime import datetime
             # make file
-            datetime = datetime.now().strftime("%m-%d-%Y %H.%M.%S")     
-            
-            self.Q = VALUES
+            self.Q = makeQ()
             self.score_hist = []
             
             self.sequence_count += 1
@@ -192,11 +196,11 @@ class Agent:
         saved = False
         while saved == False:
             try:
-                open(f"data/scores/nsarsa-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.txt", 'x') 
-                with open(f"data/scores/nsarsa-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.txt", 'w') as f:
+                open(f"data/scores/qlearning-rate-{self.STEP_SIZE}-{dt}.txt", 'x') 
+                with open(f"data/scores/qlearning-rate-{self.STEP_SIZE}-{dt}.txt", 'w') as f:
                     f.write(str(self.score_hist))
 
-                torch.save(self.Q, f"data/weights/nsarsa-{self.N}-disc-{self.DISCOUNT}-rate-{self.STEP_SIZE}-{dt}.pt")
+                torch.save(self.Q, f"data/weights/qlearning-rate-{self.STEP_SIZE}-{dt}.pt")
                 saved = True
             except Exception as e:
                 print(e)
@@ -239,3 +243,10 @@ def map_bin(x: float, minimum: float, maximum: float, n_bins: int,
         return _hash + 1
     else:
         return _hash
+
+def makeQ():
+    if config.LOAD:
+        return torch.load(f'data/weights/{config.LOAD_FILE}')
+    else:
+        Q = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS)) * 3
+        return Q

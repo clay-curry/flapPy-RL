@@ -238,6 +238,22 @@ def mainGame(movementInfo):
     playerFlapped = False # True when player flaps
 
     while True:
+        
+        # check for crash here
+        crashTest = checkCrash({'x': playerx, 'y': playery, 'index': playerIndex},
+                            upperPipes, lowerPipes)
+        if crashTest[0]:
+            return {
+                'y': config.BASEY,
+                'groundCrash': True,
+                'basex': basex,
+                'upperPipes': upperPipes,
+                'lowerPipes': lowerPipes,
+                'score': score,
+                'playerVelY': playerVelY,
+                'playerRot': playerRot
+            }
+            
         ############################# agent plays here
         if AGENTMODE:
             try:
@@ -266,20 +282,7 @@ def mainGame(movementInfo):
                 }
             except Exception as e:
                 print(e)
-        # check for crash here
-        crashTest = checkCrash({'x': playerx, 'y': playery, 'index': playerIndex},
-                            upperPipes, lowerPipes)
-        if crashTest[0]:
-            return {
-                'y': config.BASEY,
-                'groundCrash': True,
-                'basex': basex,
-                'upperPipes': upperPipes,
-                'lowerPipes': lowerPipes,
-                'score': score,
-                'playerVelY': playerVelY,
-                'playerRot': playerRot
-            }
+        
 
         # check for score
         playerMidPos = playerx + IMAGES['player'][0].get_width() / 2

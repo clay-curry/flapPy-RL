@@ -48,7 +48,7 @@ class Agent:
 
         self.Q = torch.ones((NUM_Y_STATES, NUM_V_STATES, NUM_DX_STATES, NUM_PIPE_STATES, NUM_ACTIONS + 1))
         self.Q[:,:,:,:,1] /= 1.01
-        self.Q[:,:,:,:,2] = 0.1
+        self.Q[:,:,:,:,2] = 0
         if config.LOAD:
             self.Q = torch.load(f'data/weights/{config.LOAD_FILE}')     
 
@@ -84,7 +84,7 @@ class Agent:
         try:
             Y_POS = map_bin(
                 x=y_pos,
-                minimum=config.Y_MIN_AGENT-50,
+                minimum=config.Y_MIN_AGENT,
                 maximum=config.Y_MAX_AGENT,
                 n_bins=NUM_Y_STATES,
                 enforce_bounds=True
@@ -106,9 +106,9 @@ class Agent:
             )
 
             C_PIPE = map_bin(
-                x= y_pipe-y_pos,
-                minimum=config.Y_MIN_LPIPE-config.BASEY,
-                maximum=config.Y_MAX_LPIPE + 30,
+                x= y_pipe,
+                minimum=config.Y_MIN_LPIPE,
+                maximum=config.Y_MAX_LPIPE,
                 n_bins=NUM_PIPE_STATES,
                 enforce_bounds=True)
 
@@ -172,20 +172,30 @@ class Agent:
             update_size = float(self.STEP_SIZE * (expected_update - self.Q[s][a]))
             self.Q[s][a] += update_size
             self.Q[s][2] /= 1.001
-            self.update_hist.append(update_size)
 
     def n_gameover(self):
-        while len(self.prev_SAR) > 1:
-            s, a, _ = self.prev_SAR.pop(0)
-
-            Gt = [self.prev_SAR[r][2]*(self.DISCOUNT ** r) for r in range(len(self.prev_SAR))]
-            value_now = 0
-            expected_update = sum(Gt) + value_now * self.DISCOUNT ** len(self.prev_SAR)
-            
-            update_size = float(self.STEP_SIZE * (expected_update - self.Q[s][a]))
-            self.Q[s][a] += update_size
+        self.prev_SAR.reverse()
+        s, a, r = self.prev_SAR[0]
+        pipe_height = config.Y_MIN_LPIPE + s[3] / (NUM_PIPE_STATES - 1) * (config.Y_MAX_LPIPE - config.Y_MIN_LPIPE)
+        agent_height = config.BASEY * s[0] / (NUM_Y_STATES-1) + 24
+        low_death = False
+        if agent_height > pipe_height:
+            print('low')
+            low_death = True           
+        
+        Gt = 0
+        while len(self.prev_SAR) > 0:
+            s, a, r = self.prev_SAR.pop(0)
+            if low_death and self.Q[s][0] > self.Q[s][1]:
+                if self.Q[s][0] > self.Q[s][1]:
+                    self.Q[s][1]  = self.Q[s][0] + 0.1
+                    low_death = False
+            else:
+                self.Q[s][a] += self.STEP_SIZE * (Gt - self.Q[s][a])
             self.Q[s][2] /= 1.001
-            self.update_hist.append(update_size)
+            Gt = r + self.DISCOUNT * Gt
+            
+            
             
 
     def gameover(self, score):

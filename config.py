@@ -12,7 +12,7 @@ BASEY        = SCREENHEIGHT * 0.79
 T_BETWEEN_STATES = .1
 CHECKPOINT_DT   = 5 * 60     # every 5 minutes
 X_POS_AGENT  = 57
-Y_MIN_AGENT  = 0                    # top of screen (0 = top)
+Y_MIN_AGENT  = -50                    # top of screen (0 = top)
 Y_MAX_AGENT  = BASEY                # where player crashes into ground
 Y_MAX_VELOCITY = 10
 Y_MIN_VELOCITY = -9
